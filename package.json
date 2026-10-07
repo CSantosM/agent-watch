@@ -219,6 +219,11 @@
           "default": false,
           "description": "Also show chats that have no messages yet. They are never opened from here: Claude Code cannot restore an empty chat and would start a new one instead."
         },
+        "agentWatch.showArchivedSessions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also show idle sessions you archived in Claude Code. Archived sessions are always shown while they work or wait for you."
+        },
         "agentWatch.soundOnFinish": {
           "type": "boolean",
           "default": true,

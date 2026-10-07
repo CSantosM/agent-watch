@@ -211,9 +211,12 @@ function createVscode() {
 
 function createContext() {
   const store = new Map();
+  const storage = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-watch-storage-'));
   return {
     subscriptions: [],
     extensionPath: ROOT,
+    // Like VS Code's: one folder per extension, next to the profile's state database.
+    globalStorageUri: { scheme: 'file', fsPath: path.join(storage, 'csantosm.agent-watch-status') },
     globalState: {
       get: (key) => store.get(key),
       update: async (key, value) => {
@@ -283,6 +286,19 @@ function writeSession(claudeDir, proc, fields = {}) {
   return record;
 }
 
+// Sessions archived in the Claude Code extension, written the way VS Code stores that extension's
+// global state: one row of its state database, under the extension's id, as JSON.
+function archiveInClaudeCode(dbPath, ids) {
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec('CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)');
+  db.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)').run(
+    'Anthropic.claude-code',
+    JSON.stringify({ thinkingLevel: 'default', hiddenSessionIds: ids }),
+  );
+  db.close();
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -296,5 +312,6 @@ module.exports = {
   spawnSessionProcess,
   spawnForeignProcess,
   writeSession,
+  archiveInClaudeCode,
   delay,
 };

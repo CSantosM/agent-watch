@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Archived sessions are hidden:** a session you archive in Claude Code no longer stays in the chip, hover, picker and panel while it is idle, although its process keeps running. It shows again while it works or waits for you. `agentWatch.showArchivedSessions` brings them back.
+
 ## 0.1.0 (2026-10-02)
 
 First release on the Visual Studio Marketplace.

@@ -4,8 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { createClaudeDir } = require('./helpers');
+const { createClaudeDir, archiveInClaudeCode } = require('./helpers');
 const { readSessionRecords, normalize } = require('../src/providers/claude-code/records');
+const { archivedIn } = require('../src/providers/claude-code/archive');
 const { createClaudeCodeProvider } = require('../src/providers/claude-code');
 
 test('readSessionRecords keeps valid records and skips broken ones', async () => {
@@ -78,4 +79,44 @@ test('only sessions with messages in their transcript can be restored', async ()
   const resumable = {};
   for (const session of await provider.listSessions()) resumable[session.id] = (await provider.describe(session)).resumable;
   assert.deepEqual(resumable, { 'no-transcript': false, 'titles-only': false, prompted: true });
+});
+
+test('the provider marks the sessions archived in the Claude Code extension', async () => {
+  const dir = createClaudeDir();
+  for (const [pid, sessionId] of [[300, 'kept'], [301, 'archived']]) {
+    fs.writeFileSync(path.join(dir, 'sessions', `${pid}.json`), JSON.stringify({ pid, sessionId, cwd: '/x' }));
+  }
+  const stateDb = path.join(dir, 'state.vscdb');
+  const provider = createClaudeCodeProvider({ configDir: dir, stateDb });
+  const archived = async () => (await provider.listSessions()).filter((s) => s.archived).map((s) => s.id);
+  assert.deepEqual(await archived(), [], 'no state database yet');
+
+  archiveInClaudeCode(stateDb, ['archived', 'gone']);
+  assert.deepEqual(await archived(), ['archived']);
+
+  archiveInClaudeCode(stateDb, []);
+  fs.utimesSync(stateDb, new Date(), new Date(Date.now() + 1000)); // Read again only when it changes.
+  assert.deepEqual(await archived(), [], 'unarchived in Claude Code');
+});
+
+test('a state database that cannot be read archives nothing and is reported once', async () => {
+  const dir = createClaudeDir();
+  fs.writeFileSync(path.join(dir, 'sessions', '400.json'), JSON.stringify({ pid: 400, sessionId: 'a', cwd: '/x' }));
+  const stateDb = path.join(dir, 'state.vscdb');
+  fs.writeFileSync(stateDb, 'not a database');
+  const warnings = [];
+  const provider = createClaudeCodeProvider({ configDir: dir, stateDb, log: { warn: (m) => warnings.push(m) } });
+  for (let i = 0; i < 2; i++) {
+    const [session] = await provider.listSessions();
+    assert.equal(session.archived, false, 'the session is still listed');
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /archived in Claude Code/);
+});
+
+test('archivedIn reads the ids from Claude Code state and ignores anything else', () => {
+  assert.deepEqual([...archivedIn(JSON.stringify({ hiddenSessionIds: ['a', 7, null, 'b'] }))], ['a', 'b']);
+  assert.deepEqual([...archivedIn(JSON.stringify({ hiddenSessionIds: 'a' }))], []);
+  assert.deepEqual([...archivedIn(JSON.stringify({}))], []);
+  assert.deepEqual([...archivedIn(undefined)], [], 'Claude Code never ran in this profile');
 });

@@ -76,7 +76,9 @@ class AgentWatch {
     this.logged = new Map();
 
     this.claudeOpener = new ClaudeCodeOpener({ vscode, log });
-    this.providers = createProviders({ claudeCode: { opener: this.claudeOpener } });
+    this.providers = createProviders({
+      claudeCode: { opener: this.claudeOpener, stateDb: stateDatabase(context), log },
+    });
     this.git = createGit();
     this.sound = new Sound({
       builtIns: {
@@ -232,10 +234,10 @@ class AgentWatch {
     try {
       do {
         this.again = false;
-        const sessions = await this.load();
+        const { sessions, archived } = await this.load();
         if (this.inFlight !== run) return; // A newer refresh replaced this stuck one.
         this.sessions = sessions;
-        this.announceTransitions();
+        this.announceTransitions(archived);
         this.render();
         if (this.picker) this.picker.rebuild();
         this.logChange('refresh', 'error', '');
@@ -262,7 +264,10 @@ class AgentWatch {
         // An idle chat without messages is not an agent at work, and cannot be opened.
         (cfg.showEmptySessions || !(s.empty && s.status === 'idle')),
     );
-    return arrange(sessions, cfg);
+    // A session archived in the agent's own UI is put away: hidden while idle, back while it works or
+    // waits for you.
+    const archived = cfg.showArchivedSessions ? [] : sessions.filter((s) => s.archived && s.status === 'idle');
+    return { sessions: arrange(sessions.filter((s) => !archived.includes(s)), cfg), archived };
   }
 
   async listFrom(provider) {
@@ -325,6 +330,7 @@ class AgentWatch {
       // Only a session the agent can restore is ever handed to it; anything else would start a new chat.
       resumable: details.resumable === true,
       empty: details.resumable === false,
+      archived: record.archived === true,
       openable: terminalPid !== undefined || (owned && details.resumable === true && provider.canOpen(record)),
     };
   }
@@ -389,14 +395,16 @@ class AgentWatch {
 
   // Between two refreshes, a working session that turns idle finished its turn, and one that turns
   // waiting stopped for your decision. Only this window's sessions count, so several open windows do
-  // not all react to the same session.
-  announceTransitions() {
+  // not all react to the same session. archived: the sessions hidden because they are archived and
+  // idle, so one that just finished its turn still makes its sound.
+  announceTransitions(archived = []) {
     const cfg = settings();
+    const all = [...this.sessions, ...archived];
     const changedTo = (status) =>
-      this.sessions.filter((s) => s.owned && s.status === status && this.lastStatus.get(s.key) === 'busy');
+      all.filter((s) => s.owned && s.status === status && this.lastStatus.get(s.key) === 'busy');
     const waiting = changedTo('waiting');
     const finished = changedTo('idle');
-    this.lastStatus = new Map(this.sessions.map((s) => [s.key, s.status]));
+    this.lastStatus = new Map(all.map((s) => [s.key, s.status]));
     // One sound at a time; a session that needs you outranks one that finished.
     if (waiting.length && cfg.soundOnWaiting) this.sound.play('waiting', cfg.waitingSoundFile);
     else if (finished.length && cfg.soundOnFinish) this.sound.play('finish', cfg.finishSoundFile);
@@ -519,6 +527,7 @@ class AgentWatch {
     const meta = [s.statusLabel, formatElapsed(s.since), s.folder];
     if (!grouped && s.branchLabel) meta.push(s.branchLabel);
     if (s.empty) meta.push('no messages yet');
+    if (s.archived) meta.push('archived');
     if (showProvider) meta.push(s.providerLabel);
     if (whereElse(s)) meta.push(whereElse(s));
     const lines = [
@@ -767,6 +776,7 @@ function settings() {
     order: oneOf('order', ['stable', 'status']),
     groupBy: oneOf('groupBy', ['none', 'branch']),
     showEmptySessions: c.get('showEmptySessions') === true,
+    showArchivedSessions: c.get('showArchivedSessions') === true,
     icon: typeof icon === 'string' && /^[a-z0-9-]+$/.test(icon) ? icon : 'agent-watch-robot',
     iconReflectsStatus: c.get('iconReflectsStatus') !== false,
     maxDots: Number.isInteger(maxDots) ? Math.min(50, Math.max(1, maxDots)) : 8,
@@ -778,6 +788,13 @@ function settings() {
     waitingSoundFile: soundFile('waitingSoundFile'),
     dots,
   };
+}
+
+// VS Code keeps the global state of every extension in this profile in state.vscdb, next to their
+// storage folders; that is where the Claude Code extension records which sessions are archived.
+function stateDatabase(context) {
+  const storage = context.globalStorageUri;
+  return storage && storage.scheme === 'file' ? path.join(path.dirname(storage.fsPath), 'state.vscdb') : undefined;
 }
 
 function setGroupBy(value) {

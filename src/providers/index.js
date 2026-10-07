@@ -6,9 +6,10 @@
 //   watchDirs            directories whose changes mean sessions changed (watched, and polled anyway)
 //   listSessions()       -> sessions in the provider-neutral shape (see claude-code/records.js):
 //                           { provider, id, pid, procStart?, pidDomain?, cwd, status, waitingFor?,
-//                             startedAt?, statusUpdatedAt?, updatedAt?, surface, raw }
+//                             startedAt?, statusUpdatedAt?, updatedAt?, surface, archived?, raw }
 //                           status is "busy", "waiting" or "idle"; surface is "editor" (a chat in
-//                           the agent's own VS Code extension), "cli" (a terminal) or "other".
+//                           the agent's own VS Code extension), "cli" (a terminal) or "other";
+//                           archived: put away in the agent's own UI, so it is hidden while idle.
 //   describe(session)    -> { title, action?: { text, icon }, files: [{ path, at }], branch?, resumable }
 //                           resumable: the agent can show this session without starting a new one.
 //                           Sessions that are not are never opened, and idle ones are hidden.
