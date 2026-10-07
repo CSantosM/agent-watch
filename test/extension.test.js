@@ -40,6 +40,7 @@ function setup(t, { preferred = 'panel', context = createContext() } = {}) {
     failUpdates: false,
     onExecute: undefined,
     focused: true,
+    quickPicks: [],
   });
   state.config.agentWatch = {};
   state.config.claudeCode = { global: preferred === null ? {} : { preferredLocation: preferred }, workspace: {} };
@@ -185,6 +186,56 @@ test('the chip says which session finished and how long it worked, for a few sec
   t.mock.method(Date, 'now', () => now + 11000);
   await refresh();
   assert.equal(chip().text, '$(agent-watch-robot) 🟢🟢');
+});
+
+test('the chip stops naming a finished session once it works again', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  const { proc, record } = session({ status: 'busy', name: 'feat/login', nameSource: 'user' });
+  await start();
+  writeSession(claudeDir, proc, { ...record, status: 'idle', statusUpdatedAt: Date.now() });
+  await refresh();
+  assert.match(chip().text, /\$\(check\) 1 feat\/login/);
+
+  writeSession(claudeDir, proc, { ...record, status: 'busy', statusUpdatedAt: Date.now() });
+  await refresh();
+  assert.doesNotMatch(chip().text, /check/);
+});
+
+test('a session that finished a moment before another stays counted for its own few seconds', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  const a = session({ status: 'busy', name: 'first', nameSource: 'user' });
+  const b = session({ status: 'busy', name: 'second', nameSource: 'user' });
+  await start();
+  const now = Date.now();
+  let elapsed = 0;
+  t.mock.method(Date, 'now', () => now + elapsed);
+  writeSession(claudeDir, a.proc, { ...a.record, status: 'idle' });
+  await refresh();
+  elapsed = 4000;
+  writeSession(claudeDir, b.proc, { ...b.record, status: 'idle' });
+  await refresh();
+  assert.ok(chip().text.endsWith('$(check) 2 second · <1 min +1'), chip().text);
+
+  elapsed = 11000;
+  await refresh();
+  assert.ok(chip().text.endsWith('$(check) 2 second · <1 min'), chip().text);
+});
+
+test('right after a turn ends, the picker starts on the session that finished, unless one needs you', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  const other = session({ status: 'idle' });
+  const { proc, record } = session({ status: 'busy' });
+  await start();
+  writeSession(claudeDir, proc, { ...record, status: 'idle' });
+  await refresh();
+  state.handlers['agentWatch.showSessions']();
+  assert.equal(state.quickPicks[0].activeItems[0].session.n, 2);
+
+  state.quickPicks[0].hide();
+  writeSession(claudeDir, other.proc, { ...other.record, status: 'waiting' });
+  await refresh();
+  state.handlers['agentWatch.showSessions']();
+  assert.equal(state.quickPicks[1].activeItems[0].session.n, 1);
 });
 
 test('a turn shorter than agentWatch.minTurnSeconds finishes quietly', async (t) => {

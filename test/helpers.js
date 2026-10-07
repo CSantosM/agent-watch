@@ -26,6 +26,7 @@ function createVscode() {
     failUpdates: false,
     onExecute: undefined,
     focused: true,
+    quickPicks: [],
     extensions: { 'anthropic.claude-code': {} },
     workspaceFolders: [],
     terminals: [],
@@ -157,6 +158,36 @@ function createVscode() {
       },
       get state() {
         return { focused: state.focused };
+      },
+      // A test reads what a picker highlights from state.quickPicks and presses Enter with accept().
+      createQuickPick: () => {
+        const handlers = {};
+        const on = (name) => (handler) => {
+          handlers[name] = handler;
+          return disposable();
+        };
+        const qp = {
+          items: [],
+          activeItems: [],
+          selectedItems: [],
+          buttons: [],
+          visible: false,
+          show() {
+            qp.visible = true;
+          },
+          hide() {
+            if (!qp.visible) return;
+            qp.visible = false;
+            if (handlers.hide) handlers.hide();
+          },
+          dispose() {},
+          onDidTriggerButton: on('button'),
+          onDidAccept: on('accept'),
+          onDidHide: on('hide'),
+          accept: () => handlers.accept && handlers.accept(),
+        };
+        state.quickPicks.push(qp);
+        return qp;
       },
       onDidOpenTerminal: disposable,
       onDidCloseTerminal: disposable,

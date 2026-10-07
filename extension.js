@@ -95,7 +95,7 @@ class AgentWatch {
     this.pidDomain = localPidDomain();
     this.sessions = [];
     this.lastSeen = new Map();
-    this.finished = undefined;
+    this.finished = [];
     this.finishedTimer = undefined;
     this.filter = validFilter(context.globalState.get('filter'));
     this.picker = undefined;
@@ -434,24 +434,36 @@ class AgentWatch {
   }
 
   // For a few seconds after a turn ends, the chip says which session finished and how long it worked,
-  // so the blip of a long task can be told from that of a quick reply.
+  // so the blip of a long task can be told from that of a quick reply. The latest comes first; those
+  // that finished a moment earlier still count until their own few seconds are over.
   showFinished(finished) {
-    this.finished = {
-      sessions: finished.map((f) => ({ key: f.session.key, title: f.session.title, turn: f.turn })),
-      until: Date.now() + FINISHED_MS,
-    };
+    const now = Date.now();
+    const keys = new Set(finished.map((f) => f.session.key));
+    this.finished = [
+      ...finished.map((f) => ({ key: f.session.key, title: f.session.title, turn: f.turn, until: now + FINISHED_MS })),
+      ...this.finished.filter((f) => f.until > now && !keys.has(f.key)),
+    ];
     clearTimeout(this.finishedTimer);
     this.finishedTimer = setTimeout(() => this.render(), FINISHED_MS);
   }
 
+  // The sessions whose turn ended a few seconds ago, latest first. One that is back at work or waiting
+  // is no longer news.
+  recentlyFinished(all) {
+    const now = Date.now();
+    return this.finished.filter((f) => {
+      const s = all.find((x) => x.key === f.key);
+      return f.until > now && (!s || s.status === 'idle');
+    });
+  }
+
   finishedLabel(all) {
-    const f = this.finished;
-    if (!f || Date.now() >= f.until) return '';
-    const [first] = f.sessions;
+    const [first, ...others] = this.recentlyFinished(all);
+    if (!first) return '';
     const current = all.find((s) => s.key === first.key);
     // Titles come from session data: "$(" would otherwise draw an icon.
     const title = truncate(first.title, MAX_FINISHED_TITLE).replace(/\$\(/g, '\\$(');
-    const more = f.sessions.length > 1 ? ` +${f.sessions.length - 1}` : '';
+    const more = others.length ? ` +${others.length}` : '';
     return `$(check) ${current ? `${current.n} ` : ''}${title} · ${formatElapsed(first.turn)}${more}`;
   }
 
@@ -623,10 +635,13 @@ class AgentWatch {
       });
       qp.items = items;
       const sessionItems = items.filter((i) => i.session);
-      // Keep the highlighted row across live updates; otherwise start on the first session that needs you.
+      // Keep the highlighted row across live updates; otherwise start on the first session that needs
+      // you, or else on the one the chip says just finished, so Enter takes you to it.
+      const justFinished = this.recentlyFinished(this.sessions).map((f) => sessionItems.find((i) => i.session.key === f.key));
       const active =
         sessionItems.find((i) => i.session.key === previous) ||
         sessionItems.find((i) => i.session.status === 'waiting') ||
+        justFinished.find(Boolean) ||
         sessionItems[0];
       if (active) qp.activeItems = [active];
     };
