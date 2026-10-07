@@ -14,6 +14,7 @@ const {
   spawnSessionProcess,
   spawnForeignProcess,
   writeSession,
+  archiveInClaudeCode,
   delay,
 } = require('./helpers');
 
@@ -64,7 +65,13 @@ function setup(t, { preferred = 'panel', context = createContext() } = {}) {
     extension.activate(context);
     await refresh();
   };
-  return { context, claudeDir, session, transcript, start };
+  // Archives sessions in the Claude Code extension, which keeps them in VS Code's state database.
+  const archive = (...records) => {
+    const db = path.join(path.dirname(context.globalStorageUri.fsPath), 'state.vscdb');
+    archiveInClaudeCode(db, records.map((r) => r.sessionId));
+    fs.utimesSync(db, new Date(), new Date(Date.now() + Math.random() * 1e6)); // Seen as a change.
+  };
+  return { context, claudeDir, session, transcript, start, archive };
 }
 
 const refresh = () => state.handlers['agentWatch.refresh']();
@@ -290,6 +297,44 @@ test('hides idle chats without messages, but shows them while they work', async 
   session({ status: 'idle' });
   await start();
   assert.equal(chip().text, '$(agent-watch-robot) 1 🟡🟢');
+});
+
+test('hides idle sessions archived in Claude Code, but shows them while they work', async (t) => {
+  const { session, start, archive } = setup(t);
+  const idle = session({ status: 'idle' });
+  const busy = session({ status: 'busy' });
+  session({ status: 'idle' });
+  await start();
+  assert.equal(chip().text, '$(agent-watch-robot) 1 🟢🟡🟢');
+
+  archive(idle.record, busy.record);
+  await refresh();
+  assert.equal(chip().text, '$(agent-watch-robot) 1 🟡🟢', 'archived while it runs, as Claude Code allows');
+  assert.match(chip().tooltip.value, /archived/);
+
+  archive();
+  await refresh();
+  assert.equal(chip().text, '$(agent-watch-robot) 1 🟢🟡🟢', 'unarchived in Claude Code');
+});
+
+test('an archived session that finishes its turn still blips', async (t) => {
+  const { claudeDir, session, start, archive } = setup(t);
+  const { proc, record } = session({ status: 'busy' });
+  archive(record);
+  await start();
+  writeSession(claudeDir, proc, { ...record, status: 'idle' });
+  await refresh();
+  // Hidden again, but the chip still says which session the blip came from.
+  assert.equal(chip().text, '$(agent-watch-robot) No agents $(check) project-1a · <1 min');
+  assert.deepEqual(state.spawned.map((s) => path.basename(s.args[0])), ['finish.wav']);
+});
+
+test('shows idle archived sessions when asked', async (t) => {
+  const { session, start, archive } = setup(t);
+  state.config.agentWatch.showArchivedSessions = true;
+  archive(session({ status: 'idle' }).record);
+  await start();
+  assert.equal(chip().text, '$(agent-watch-robot) 🟢');
 });
 
 test('two quick clicks open one after the other', async (t) => {

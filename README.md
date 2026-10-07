@@ -72,6 +72,8 @@ Agent Watch only takes you to sessions that already exist; it never starts one. 
 
 Chats that have no messages yet are hidden (set `agentWatch.showEmptySessions` to see them) and never opened: Claude Code cannot restore an empty chat, and asked to, it starts a new one instead. Your Claude Code settings are never touched.
 
+Sessions you archive in Claude Code are hidden too while they are idle, a few seconds after you archive them, even though their process keeps running. They come back while they work or wait for you, marked *archived* in the hover. Set `agentWatch.showArchivedSessions` to keep seeing them.
+
 Sessions running in an integrated terminal focus that terminal instead.
 
 ### Sounds
@@ -95,6 +97,7 @@ Each agent is read by a **provider** (see [Adding an agent](#adding-an-agent)). 
 
 - **Sessions:** Claude Code writes one record per running session to `~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`) with its `status` (`busy`, `waiting`, `idle`), `cwd` and start time. The extension watches that directory and re-checks every 5 seconds. It only reads the `.json` records, never the `.key` files next to them.
 - **Titles, activity and edited files:** read from the session's transcript in `~/.claude/projects/` and its subagents' transcripts. Each refresh reads only what was appended since the last one.
+- **Archived sessions:** archiving a chat leaves its record in place; the Claude Code extension only adds its id to its own VS Code state (`hiddenSessionIds`). Extensions cannot read each other's state through the VS Code API, so Agent Watch reads it, read-only, from the database where VS Code keeps it (`state.vscdb` in the profile's `globalStorage` folder), with Node's built-in SQLite module, and only again when that file changes.
 - **Branches and changes:** the branch comes from the folder's `.git` (worktrees included) without running git; line counts and diffs run `git status`, `git diff` and `git show`, only when the panel asks.
 
 And for every agent:
@@ -118,6 +121,7 @@ Nothing leaves the machine: no network calls, no telemetry.
 | -------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
 | `agentWatch.scope`              | `window`         | `window`: sessions started from this window. `workspace`: also others inside this workspace. `all`: every session on the machine. |
 | `agentWatch.showEmptySessions` | `false`          | Also show chats that have no messages yet. They are never opened from here.                        |
+| `agentWatch.showArchivedSessions` | `false`       | Also show idle sessions you archived in Claude Code. They always show while they work or wait.     |
 | `agentWatch.soundOnFinish`      | `true`           | Play a blip when a session in this window finishes its turn.                                       |
 | `agentWatch.soundOnWaiting`     | `true`           | Play an alert when a session in this window waits for your decision.                              |
 | `agentWatch.finishSoundFile`    | (empty)          | `.wav` file to play instead of the built-in finish blip.                                           |
@@ -142,6 +146,7 @@ Everything specific to an agent lives in a provider under `src/providers/`. A pr
 ## Limitations
 
 - Claude Code's session records and transcripts are internal formats, not a documented API. If an update changes them, sessions or their activity may stop showing; Claude Code itself is unaffected.
+- So is the way Claude Code and VS Code store archived sessions. Archived sessions keep showing where it cannot be read: VS Code versions whose Node has no built-in SQLite module, and remote windows (SSH, WSL, dev containers), whose extension state stays on the local machine.
 - A status bar item takes a single text color and a single click target. That is why the dots are emoji, and why sessions are opened from the hover or the picker rather than by clicking an individual dot.
 - Window ownership needs `/proc` (Linux). Elsewhere, sessions inside the workspace folders count as this window's.
 
@@ -182,8 +187,28 @@ cd agent-watch
 | `scripts/make-icons.py` | Draws the robot once and writes the status bar font glyph, the activity bar icon and the extension icon, the last two with the three status dots (`python3 scripts/make-icons.py`; needs fontTools and Chrome) |
 | `l10n/`         | Translations of the extension's own texts (`bundle.l10n.<language>.json`)      |
 | `scripts/make-sounds.js` | Synthesizes the finish blip                                                    |
+| `.github/workflows/release.yml` | Releases a new version to the Marketplace and GitHub (see [Releasing](#releasing)) |
+| `scripts/stamp-changelog.js` | Turns the `## Unreleased` section of the changelog into the release's section; used by the release workflow |
 
 Run the tests with `npm test` (or `node --test 'test/*.test.js'`). The extension tests start real `sleep` processes to stand in for Claude sessions, so they need Linux.
+
+### Releasing
+
+1. While working, list the changes under a `## Unreleased` heading at the top of `CHANGELOG.md`.
+2. In GitHub, open **Actions › Release › Run workflow**, keep the branch on `main` and choose the part of the version to increase: `patch`, `minor` or `major`. Tick **dry_run** to check the sign-in, test and package without publishing anything.
+
+The workflow renames `## Unreleased` to `## <version> (<date>)`, packages the extension (running the tests), publishes it to the Visual Studio Marketplace, pushes the commit `Agent Watch <version>` and the tag `v<version>` to `main`, and creates the GitHub release with the `.vsix` and the changelog section as its notes. It stops before changing anything if the `## Unreleased` section is missing or empty, or if it cannot sign in to the Marketplace. If it fails before pushing the tag, run it again: it releases the same version, and skips publishing it if the Marketplace already has it.
+
+The job runs in the `marketplace` environment and signs in to the Marketplace with one of:
+
+- **Microsoft Entra ID** (preferred, no secret to store):
+  1. In Azure, create a user-assigned managed identity and add it a federated credential for *GitHub Actions deploying Azure resources*: organization `CSantosM`, repository `agent-watch`, entity *Environment*, environment `marketplace`.
+  2. In GitHub, set the repository variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` to the identity's client ID and tenant ID.
+  3. Run the workflow with **dry_run**. The step *Check the Marketplace sign-in* prints the identity's *Azure DevOps ID* (and fails, because the identity cannot publish yet).
+  4. In the [Marketplace publisher page](https://marketplace.visualstudio.com/manage/publishers/csantosm), add that ID as a member with the *Contributor* role. The next dry run passes.
+- **A personal access token**: an Azure DevOps token for *All accessible organizations* with the *Marketplace › Manage* scope, in the repository secret `VSCE_PAT`. Azure DevOps retires these global tokens on 2026-12-01; use Entra ID after that.
+
+If both are set, the workflow uses Entra ID.
 
 ## Credits and license
 
