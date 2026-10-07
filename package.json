@@ -239,10 +239,21 @@
           "default": "",
           "markdownDescription": "Absolute path of a `.wav` file to play instead of the built-in waiting sound. Try it with **Agent Watch: Play Waiting Sound**."
         },
+        "agentWatch.minTurnSeconds": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Turns shorter than this many seconds finish quietly: no finish blip, no system notification and no mention in the chip. 0 announces every turn."
+        },
         "agentWatch.notifyOnWaiting": {
           "type": "boolean",
           "default": true,
           "description": "Show a notification with an Open button when a session in this window stops to wait for your decision."
+        },
+        "agentWatch.desktopNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "While this window is minimized or behind another window, also show a system notification when one of its sessions finishes its turn or stops to wait for your decision (notify-send on Linux, Notification Center on macOS)."
         },
         "agentWatch.order": {
           "type": "string",

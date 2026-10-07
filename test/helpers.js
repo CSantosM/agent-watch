@@ -25,6 +25,7 @@ function createVscode() {
     spawned: [],
     failUpdates: false,
     onExecute: undefined,
+    focused: true,
     extensions: { 'anthropic.claude-code': {} },
     workspaceFolders: [],
     terminals: [],
@@ -154,6 +155,9 @@ function createVscode() {
       get terminals() {
         return state.terminals;
       },
+      get state() {
+        return { focused: state.focused };
+      },
       onDidOpenTerminal: disposable,
       onDidCloseTerminal: disposable,
       // state.respond(message, buttons) picks the button a test "clicks".
@@ -187,7 +191,8 @@ function createVscode() {
     },
   };
 
-  // Audio players never run for real: sound.js gets a child_process whose players exit at once.
+  // Audio players and notifiers never run for real: sound.js and desktop.js get a child_process whose
+  // commands exit at once.
   const fakeChildProcess = {
     spawn(command, args) {
       state.spawned.push({ command, args });
@@ -200,7 +205,8 @@ function createVscode() {
   const load = Module._load;
   Module._load = function (request, parent, ...rest) {
     if (request === 'vscode') return vscode;
-    if (request === 'child_process' && parent && parent.filename === path.join(ROOT, 'src', 'sound.js')) {
+    const fakes = ['sound.js', 'desktop.js'].map((file) => path.join(ROOT, 'src', file));
+    if (request === 'child_process' && parent && fakes.includes(parent.filename)) {
       return fakeChildProcess;
     }
     return load.call(this, request, parent, ...rest);

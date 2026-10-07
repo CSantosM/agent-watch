@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Which session finished:** for 10 seconds after a turn ends, the chip shows the session's number, title and how long it worked (`✓ 3 feat/login · 31 min`), also for other windows' sessions with the `workspace` or `all` scope.
+- **System notifications** while the window is minimized or in the background, when one of its sessions finishes or needs your decision (Linux and macOS). `agentWatch.desktopNotifications` turns them off.
+- **`agentWatch.minTurnSeconds`:** turns shorter than this finish quietly, so a quick reply does not sound like a long task.
+
 ## 0.1.0 (2026-10-02)
 
 First release on the Visual Studio Marketplace.

@@ -38,6 +38,7 @@ function setup(t, { preferred = 'panel', context = createContext() } = {}) {
     spawned: [],
     failUpdates: false,
     onExecute: undefined,
+    focused: true,
   });
   state.config.agentWatch = {};
   state.config.claudeCode = { global: preferred === null ? {} : { preferredLocation: preferred }, workspace: {} };
@@ -162,6 +163,91 @@ test('each sound can be turned off', async (t) => {
     await refresh();
   }
   assert.equal(state.spawned.length, 0);
+});
+
+test('the chip says which session finished and how long it worked, for a few seconds', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  session({ status: 'idle' });
+  const { proc, record } = session({ status: 'busy', statusUpdatedAt: Date.now() - 31 * 60000, name: 'feat/login', nameSource: 'user' });
+  await start();
+  writeSession(claudeDir, proc, { ...record, status: 'idle', statusUpdatedAt: Date.now() });
+  await refresh();
+  assert.equal(chip().text, '$(agent-watch-robot) 🟢🟢 $(check) 2 feat/login · 31 min');
+
+  const now = Date.now();
+  t.mock.method(Date, 'now', () => now + 11000);
+  await refresh();
+  assert.equal(chip().text, '$(agent-watch-robot) 🟢🟢');
+});
+
+test('a turn shorter than agentWatch.minTurnSeconds finishes quietly', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  state.config.agentWatch.minTurnSeconds = 30;
+  state.focused = false;
+  const quick = session({ status: 'busy', statusUpdatedAt: Date.now() - 5000 });
+  const long = session({ status: 'busy', statusUpdatedAt: Date.now() - 60000 });
+  await start();
+  writeSession(claudeDir, quick.proc, { ...quick.record, status: 'idle', statusUpdatedAt: Date.now() });
+  await refresh();
+  assert.deepEqual(state.spawned, [], 'no blip and no system notification');
+  assert.doesNotMatch(chip().text, /check/);
+
+  writeSession(claudeDir, long.proc, { ...long.record, status: 'idle', statusUpdatedAt: Date.now() });
+  await refresh();
+  assert.deepEqual(state.spawned.map((s) => s.command), ['pw-play', 'notify-send']);
+  assert.match(chip().text, /\$\(check\) 2 /);
+});
+
+test('while the window is in the background, a system notification says which session finished or waits', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  state.focused = false;
+  const a = session({ status: 'busy', statusUpdatedAt: Date.now() - 3 * 60000, name: 'feat/login', nameSource: 'user' });
+  const b = session({ status: 'busy', name: 'fix/bug', nameSource: 'user' });
+  await start();
+  writeSession(claudeDir, a.proc, { ...a.record, status: 'idle', statusUpdatedAt: Date.now() });
+  writeSession(claudeDir, b.proc, { ...b.record, status: 'waiting', waitingFor: 'Permission to run Bash' });
+  await refresh();
+  const notifications = state.spawned.filter((s) => s.command === 'notify-send');
+  assert.deepEqual(
+    notifications.map((s) => s.args.slice(-2)),
+    [
+      ['"fix/bug" needs your decision', 'Permission to run Bash · /tmp/project'],
+      ['"feat/login" finished', 'Worked 3 min · /tmp/project'],
+    ],
+  );
+  assert.ok(notifications[0].args.includes('--app-name=Agent Watch'));
+});
+
+test('system notifications can be turned off', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  state.focused = false;
+  state.config.agentWatch.desktopNotifications = false;
+  const { proc, record } = session({ status: 'busy' });
+  await start();
+  writeSession(claudeDir, proc, { ...record, status: 'idle' });
+  await refresh();
+  assert.deepEqual(state.spawned.map((s) => s.command), ['pw-play']);
+});
+
+test('with a wider scope, the chip names sessions of other windows that finish, which sound there', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  state.config.agentWatch.scope = 'all';
+  state.focused = false;
+  const { proc, record } = session({ status: 'busy', name: 'other', nameSource: 'user' }, spawnForeignProcess);
+  await start();
+  writeSession(claudeDir, proc, { ...record, status: 'idle' });
+  await refresh();
+  assert.deepEqual(state.spawned, [], 'its own window makes the sound and the notification');
+  assert.equal(chip().text, '$(agent-watch-robot) 🟢 $(check) 1 other · <1 min');
+});
+
+test('escapes icon references in the title the chip names', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  const { proc, record } = session({ status: 'busy', name: '$(bug) fix', nameSource: 'user' });
+  await start();
+  writeSession(claudeDir, proc, { ...record, status: 'idle' });
+  await refresh();
+  assert.ok(chip().text.endsWith(' \\$(bug) fix · <1 min'));
 });
 
 test('escapes session titles in the trusted hover', async (t) => {

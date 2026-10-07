@@ -11,6 +11,7 @@ const { ClaudeCodeOpener } = require('./src/providers/claude-code/open');
 const { createGit } = require('./src/git');
 const { SessionsPanel } = require('./src/panel');
 const { Sound } = require('./src/sound');
+const { DesktopNotifier } = require('./src/desktop');
 const { formatElapsed, plural, truncate, escapeMarkdown, commandLink, withTimeout } = require('./src/util');
 
 const CMD = {
@@ -55,6 +56,8 @@ const MAX_HOVER_ROWS = 12;
 const MAX_TITLE = 80;
 const MAX_DETAIL = 140;
 const MAX_NOTIFICATIONS = 3;
+const FINISHED_MS = 10000;
+const MAX_FINISHED_TITLE = 30;
 
 function activate(context) {
   const log = vscode.window.createOutputChannel('Agent Watch', { log: true });
@@ -86,9 +89,12 @@ class AgentWatch {
       warn: (message) => vscode.window.showWarningMessage(message),
       log,
     });
+    this.desktop = new DesktopNotifier({ icon: path.join(context.extensionPath, 'media', 'icon.png'), log });
     this.pidDomain = localPidDomain();
     this.sessions = [];
-    this.lastStatus = new Map();
+    this.lastSeen = new Map();
+    this.finished = undefined;
+    this.finishedTimer = undefined;
     this.filter = validFilter(context.globalState.get('filter'));
     this.picker = undefined;
     this.watchers = new Map();
@@ -120,6 +126,7 @@ class AgentWatch {
         dispose: () => {
           clearInterval(timer);
           clearTimeout(this.debounce);
+          clearTimeout(this.finishedTimer);
           for (const dir of [...this.watchers.keys()]) this.unwatch(dir);
           this.closePicker();
         },
@@ -317,6 +324,7 @@ class AgentWatch {
       statusLabel: status === 'unknown' && record.status ? truncate(String(record.status), 20) : STATUS[status].label,
       waitingFor: status === 'waiting' ? record.waitingFor : undefined,
       since: now - statusSince,
+      statusAt: statusSince,
       startedAt: record.startedAt || 0,
       updatedAt: record.updatedAt || statusSince,
       surface: record.surface,
@@ -388,19 +396,55 @@ class AgentWatch {
   }
 
   // Between two refreshes, a working session that turns idle finished its turn, and one that turns
-  // waiting stopped for your decision. Only this window's sessions count, so several open windows do
-  // not all react to the same session.
+  // waiting stopped for your decision. Only this window's sessions make a sound or a system
+  // notification, so several open windows do not all react to the same session. A turn shorter than
+  // agentWatch.minTurnSeconds finishes quietly.
   announceTransitions() {
     const cfg = settings();
     const changedTo = (status) =>
-      this.sessions.filter((s) => s.owned && s.status === status && this.lastStatus.get(s.key) === 'busy');
-    const waiting = changedTo('waiting');
-    const finished = changedTo('idle');
-    this.lastStatus = new Map(this.sessions.map((s) => [s.key, s.status]));
+      this.sessions.filter((s) => s.status === status && (this.lastSeen.get(s.key) || {}).status === 'busy');
+    const waiting = changedTo('waiting').filter((s) => s.owned);
+    const finished = changedTo('idle')
+      .map((s) => ({ session: s, turn: Math.max(0, s.statusAt - this.lastSeen.get(s.key).statusAt) }))
+      .filter((f) => f.turn >= cfg.minTurnSeconds * 1000);
+    const ownFinished = finished.filter((f) => f.session.owned);
+    this.lastSeen = new Map(this.sessions.map((s) => [s.key, s]));
     // One sound at a time; a session that needs you outranks one that finished.
     if (waiting.length && cfg.soundOnWaiting) this.sound.play('waiting', cfg.waitingSoundFile);
-    else if (finished.length && cfg.soundOnFinish) this.sound.play('finish', cfg.finishSoundFile);
+    else if (ownFinished.length && cfg.soundOnFinish) this.sound.play('finish', cfg.finishSoundFile);
+    if (finished.length) this.showFinished(finished);
     if (cfg.notifyOnWaiting) waiting.slice(0, MAX_NOTIFICATIONS).forEach((s) => this.notifyWaiting(s));
+    // Minimized, or behind another window: VS Code's notifications and the chip cannot be seen.
+    if (cfg.desktopNotifications && !vscode.window.state.focused) {
+      for (const s of waiting.slice(0, MAX_NOTIFICATIONS)) {
+        this.desktop.notify(`"${truncate(s.title, MAX_TITLE)}" needs your decision`, [s.waitingFor, s.folder].filter(Boolean).join(' · '));
+      }
+      for (const { session: s, turn } of ownFinished.slice(0, MAX_NOTIFICATIONS)) {
+        this.desktop.notify(`"${truncate(s.title, MAX_TITLE)}" finished`, `Worked ${formatElapsed(turn)} · ${s.folder}`);
+      }
+    }
+  }
+
+  // For a few seconds after a turn ends, the chip says which session finished and how long it worked,
+  // so the blip of a long task can be told from that of a quick reply.
+  showFinished(finished) {
+    this.finished = {
+      sessions: finished.map((f) => ({ key: f.session.key, title: f.session.title, turn: f.turn })),
+      until: Date.now() + FINISHED_MS,
+    };
+    clearTimeout(this.finishedTimer);
+    this.finishedTimer = setTimeout(() => this.render(), FINISHED_MS);
+  }
+
+  finishedLabel(all) {
+    const f = this.finished;
+    if (!f || Date.now() >= f.until) return '';
+    const [first] = f.sessions;
+    const current = all.find((s) => s.key === first.key);
+    // Titles come from session data: "$(" would otherwise draw an icon.
+    const title = truncate(first.title, MAX_FINISHED_TITLE).replace(/\$\(/g, '\\$(');
+    const more = f.sessions.length > 1 ? ` +${f.sessions.length - 1}` : '';
+    return `$(check) ${current ? `${current.n} ` : ''}${title} · ${formatElapsed(first.turn)}${more}`;
   }
 
   async notifyWaiting(s) {
@@ -443,6 +487,8 @@ class AgentWatch {
     if (dots) text += ` ${dots}`;
     if (visible.length > shown.length) text += ` +${visible.length - shown.length}`;
     if (this.filter !== 'all') text += ' $(filter)';
+    const finished = this.finishedLabel(all);
+    if (finished) text += ` ${finished}`;
     // With no sessions the chip keeps the status bar's own color, so it stays easy to find.
     const color = (cfg.iconReflectsStatus && urgentColor(all)) || '';
     const tooltip = this.tooltip(all, visible, cfg);
@@ -751,6 +797,7 @@ function settings() {
   const oneOf = (key, allowed) => (allowed.includes(c.get(key)) ? c.get(key) : allowed[0]);
   const icon = c.get('icon');
   const maxDots = Number(c.get('maxDots'));
+  const minTurn = Number(c.get('minTurnSeconds'));
   const dots = { ...DEFAULT_DOTS };
   const custom = c.get('dots');
   if (custom && typeof custom === 'object') {
@@ -773,7 +820,9 @@ function settings() {
     hideWhenEmpty: c.get('hideWhenEmpty') === true,
     soundOnFinish: c.get('soundOnFinish') !== false,
     soundOnWaiting: c.get('soundOnWaiting') !== false,
+    minTurnSeconds: Number.isFinite(minTurn) && minTurn > 0 ? minTurn : 0,
     notifyOnWaiting: c.get('notifyOnWaiting') !== false,
+    desktopNotifications: c.get('desktopNotifications') !== false,
     finishSoundFile: soundFile('finishSoundFile'),
     waitingSoundFile: soundFile('waitingSoundFile'),
     dots,
