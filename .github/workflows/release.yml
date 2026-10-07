@@ -1,0 +1,146 @@
+# Releases a new version of Agent Watch: increases the version, turns the "## Unreleased" section of
+# CHANGELOG.md into the section of the release, tests and packages the extension, publishes it to the
+# Visual Studio Marketplace, pushes the release commit and its tag to main and creates the GitHub
+# release with the .vsix. Run it by hand from the Actions tab (Release > Run workflow) on main.
+#
+# The Marketplace sign-in, in order of preference:
+#   - Microsoft Entra ID: the repository variables AZURE_CLIENT_ID and AZURE_TENANT_ID of a managed
+#     identity that is a member of the publisher. Nothing secret is stored.
+#   - A personal access token in the secret VSCE_PAT. Azure DevOps retires the global tokens vsce
+#     needs on 2026-12-01.
+# See "Releasing" in the README.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Part of the version to increase
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: Check the sign-in, test and package; publish nothing (the .vsix is kept with the run)
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: marketplace
+    permissions:
+      contents: write # push the release commit and tag, create the GitHub release
+      id-token: write # sign in to Azure with OpenID Connect
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Sign in to Azure
+        if: ${{ vars.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Check the Marketplace sign-in
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          publisher=$(node -p "require('./package.json').publisher")
+          if [[ -n "$AZURE_CLIENT_ID" ]]; then
+            # The Marketplace knows the identity by its Azure DevOps ID, the one to add to the publisher.
+            echo "Azure DevOps ID of the identity: $(az rest -u https://app.vssps.visualstudio.com/_apis/profile/profiles/me --resource 499b84ac-1321-427f-aa17-267ca6975798 --query id -o tsv)"
+            npx --yes @vscode/vsce@4 verify-pat --azure-credential "$publisher"
+          elif [[ -n "$VSCE_PAT" ]]; then
+            npx --yes @vscode/vsce@4 verify-pat "$publisher"
+          elif [[ "$DRY_RUN" == true ]]; then
+            echo "::warning::No Marketplace sign-in is set up, so a release would fail."
+          else
+            echo "::error::No Marketplace sign-in: set the variables AZURE_CLIENT_ID and AZURE_TENANT_ID, or the secret VSCE_PAT."
+            exit 1
+          fi
+
+      - name: Increase the version and stamp the changelog
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          version=$(npm version "$BUMP" --no-git-tag-version)
+          version=${version#v}
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            echo "::error::Tag v$version already exists."
+            exit 1
+          fi
+          node scripts/stamp-changelog.js "$version" "$(date -u +%F)" > "$RUNNER_TEMP/changes.md"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "VSIX=agent-watch-status-$version.vsix" >> "$GITHUB_ENV"
+
+      # vsce runs the tests first (the "vscode:prepublish" script) and refuses to package if any fails.
+      - name: Test and package
+        run: npx --yes @vscode/vsce@4 package --out "$VSIX"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.VSIX }}
+          path: ${{ env.VSIX }}
+          if-no-files-found: error
+
+      - name: Write the release notes
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" << EOF
+          ## What's new
+
+          $(cat "$RUNNER_TEMP/changes.md")
+
+          ## Install
+
+          - From the Marketplace: search for **Agent Watch** in the Extensions view, or run \`code --install-extension csantosm.agent-watch-status\`.
+          - From this release: download \`$VSIX\` below and run \`code --install-extension $VSIX\`.
+
+          ---
+
+          SHA-256 of \`$VSIX\`: \`$(sha256sum "$VSIX" | cut -d ' ' -f 1)\`
+          EOF
+          { echo "# Agent Watch $VERSION"; echo; cat "$RUNNER_TEMP/notes.md"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit and tag the release
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json CHANGELOG.md
+          git commit --message "Agent Watch $VERSION"
+          git tag --annotate "v$VERSION" --message "Agent Watch $VERSION"
+
+      # Publishing first and skipping a version the Marketplace already has lets a failed run be
+      # re-run: until the tag is pushed, a re-run releases the same version.
+      - name: Publish to the Visual Studio Marketplace
+        if: ${{ !inputs.dry_run }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [[ -n "$AZURE_CLIENT_ID" ]]; then
+            npx --yes @vscode/vsce@4 publish --packagePath "$VSIX" --skip-duplicate --azure-credential
+          else
+            npx --yes @vscode/vsce@4 publish --packagePath "$VSIX" --skip-duplicate
+          fi
+
+      - name: Push the release commit and tag
+        if: ${{ !inputs.dry_run }}
+        run: git push --atomic origin HEAD:main "v$VERSION"
+
+      - name: Create the GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v$VERSION" "$VSIX" --title "Agent Watch $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
