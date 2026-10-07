@@ -122,7 +122,8 @@ test('trackedFiles keeps only the files git tracks, taking names literally', asy
   fs.writeFileSync(path.join(root, 'dist', 'out.js'), 'built\n');
   fs.writeFileSync(path.join(root, 'weird*.txt'), 'star\n');
   fs.writeFileSync(path.join(root, 'weirdX.txt'), 'not tracked\n');
-  git(root, 'add', '.gitignore', 'weird*.txt');
+  // Literal, or some git versions also add weirdX.txt, which matches weird*.txt as a glob.
+  git(root, 'add', '.gitignore', ':(literal)weird*.txt');
   git(root, 'commit', '-q', '-m', 'more');
   fs.writeFileSync(path.join(root, 'src', 'new.txt'), 'untracked\n');
 
