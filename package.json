@@ -3,7 +3,7 @@
   "displayName": "Agent Watch",
   "description": "Watch your coding agents from the status bar: one dot per session (working, waiting or idle), what each is doing, the files it changed, and a sound when it needs you. Supports Claude Code.",
   "icon": "media/icon.png",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "csantosm",
   "preview": true,
   "license": "MIT",

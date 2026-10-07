@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-07)
 
 - **Archived sessions are hidden:** a session you archive in Claude Code no longer stays in the chip, hover, picker and panel while it is idle, although its process keeps running. It shows again while it works or waits for you. `agentWatch.showArchivedSessions` brings them back.
 - **Which session finished:** for 10 seconds after a turn ends, the chip shows the session's number, title and how long it worked (`✓ 3 feat/login · 31 min`), also for other windows' sessions with the `workspace` or `all` scope. Clicking the chip then opens the picker on that session.
