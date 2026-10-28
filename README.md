@@ -5,7 +5,7 @@
 A status bar chip that shows every running coding agent session at a glance: the Agent Watch robot, the number of agents working, and one dot per session. For now it supports [Claude Code](#supported-agents).
 
 <p align="center">
-  <img src="docs/images/hover.png" width="820" alt="The chip at the right of the VS Code status bar, next to the notifications bell: a red robot icon followed by five colored dots. Above it, the hover card lists the five sessions in the same order, each with its title, status, time and folder, plus filter links for All, Working, Waiting and Idle.">
+  <img src="docs/images/hover.png" width="820" alt="The chip at the right of the VS Code status bar, next to the notifications bell: a red robot icon followed by five colored dots and two rings for the 5-hour and weekly usage limits. Above it, the hover card lists the five sessions in the same order, each with its title, status, time and folder, plus filter links for All, Working, Waiting and Idle, and the detail of each usage limit.">
 </p>
 
 | Dot | Status  | Meaning                               |
@@ -14,10 +14,10 @@ A status bar chip that shows every running coding agent session at a glance: the
 | 🔴  | Waiting | It needs your permission or an answer |
 | 🟢  | Idle    | It finished and is ready for more     |
 
-The number after the robot counts the agents working right now, like the Source Control count of changes; the panel's badge in the activity bar shows the same number. The robot takes the color of the most urgent status: red if any session is waiting, yellow if any is working. With no sessions, the chip says *No agents*, in the language VS Code uses (English and Spanish so far).
+The number after the robot counts the agents working right now, like the Source Control count of changes; the panel's badge in the activity bar shows the same number. The robot takes the color of the most urgent status: red if any session is waiting, yellow if any is working. With no sessions, the chip says *No agents*, in the language VS Code uses (English and Spanish so far). After the dots, two rings show how much of your Claude plan's [usage limits](#usage-limits) is used.
 
 <p align="center">
-  <img src="docs/images/states.png" width="560" alt="Six states of the chip: no sessions shows the robot and "No agents"; all idle shows green dots after a gray robot; some working turns the robot yellow and adds the number of agents working; someone waiting turns it red; a filter to Waiting shows one red dot and a funnel; more than eight sessions shows eight dots and +3.">
+  <img src="docs/images/states.png" width="560" alt="Seven states of the chip: no sessions shows the robot and "No agents"; all idle shows green dots after a gray robot; some working turns the robot yellow and adds the number of agents working; someone waiting turns it red; a filter to Waiting shows one red dot and a funnel; more than eight sessions shows eight dots and +3; with plan usage, the dots are followed by 5h and 7d, each with a ring and the percent used.">
 </p>
 
 ## Supported agents
@@ -41,6 +41,16 @@ This is a community project, not affiliated with or endorsed by Anthropic.
 <p align="center">
   <img src="docs/images/picker.png" width="760" alt="The session picker at the top of the window: a search box and the five sessions, each with its dot, number, title, status and time, and below it what it is doing, its folder and its branch. The waiting session is highlighted.">
 </p>
+
+### Usage limits
+
+After the dots, two rings show how much of your Claude plan's usage limits is used, the ones Claude Code's `/usage` shows: `5h` for the 5-hour session limit and `7d` for the weekly one. Like a progress spinner, each ring fills up clockwise as you use the plan, and the number next to it is the percent used: `5h 19%` means 19% of the 5-hour limit is used. Hover the chip for the detail of every limit `/usage` lists, the weekly ones for a single model included (such as *Weekly limit, Fable*): how much of it is used, and when it resets, both how soon and at what time.
+
+<p align="center">
+  <img src="docs/images/usage.png" width="820" alt="The chip at the right of the status bar: a red robot, a yellow and a red dot, then 5h with a ring a fifth full and 19%, and 7d with a ring about a third full and 36%. Above it, the hover card lists the two sessions and, under them, a ring for each limit: 5-hour limit, 19% used, resets in 2 h 14 min (19:59); Weekly limit, 36% used, resets in 3 d (Sun 1 Nov, 12:59); Weekly limit, Fable, 8% used, resets in 3 d; and in italics, Read by Claude Code 1 min ago.">
+</p>
+
+The figures are the last reading Claude Code took, which it keeps in its global config (`~/.claude.json`). Claude Code only takes a new reading while it runs, so the hover says how old it is, and a limit whose window ended since then shows empty. With no reading, such as when Claude Code is signed in with an API key, the rings are hidden. `agentWatch.showUsage` turns them off.
 
 ### The panel
 
@@ -98,6 +108,7 @@ Each agent is read by a **provider** (see [Adding an agent](#adding-an-agent)). 
 - **Sessions:** Claude Code writes one record per running session to `~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`) with its `status` (`busy`, `waiting`, `idle`), `cwd` and start time. The extension watches that directory and re-checks every 5 seconds. It only reads the `.json` records, never the `.key` files next to them.
 - **Titles, activity and edited files:** read from the session's transcript in `~/.claude/projects/` and its subagents' transcripts. Each refresh reads only what was appended since the last one.
 - **Archived sessions:** archiving a chat leaves its record in place; the Claude Code extension only adds its id to its own VS Code state (`hiddenSessionIds`). Extensions cannot read each other's state through the VS Code API, so Agent Watch reads it, read-only, from the database where VS Code keeps it (`state.vscdb` in the profile's `globalStorage` folder), with Node's built-in SQLite module, and only again when that file changes.
+- **Usage limits:** each time Claude Code fetches the plan's usage, it caches it in `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`) under `cachedUsageUtilization`. Agent Watch reads every limit from there (the `limits` list `/usage` shows, or the older `five_hour` and `seven_day` fields), only again when the file changes, and never asks for them online or touches Claude Code's credentials.
 - **Branches and changes:** the branch comes from the folder's `.git` (worktrees included) without running git; line counts and diffs run `git status`, `git diff` and `git show`, only when the panel asks.
 
 And for every agent:
@@ -135,6 +146,7 @@ Nothing leaves the machine: no network calls, no telemetry.
 | `agentWatch.iconReflectsStatus` | `true`           | Color the icon with the most urgent status.                                                        |
 | `agentWatch.maxDots`            | `8`              | Dots shown before the rest are grouped as `+N`.                                                    |
 | `agentWatch.hideWhenEmpty`      | `false`          | Hide the chip when no sessions are running.                                                        |
+| `agentWatch.showUsage`          | `true`           | Show how much of the plan's 5-hour and weekly usage limits is used as two rings after the dots, and every limit in the hover. |
 | `agentWatch.dots`               | `🟡 🔴 🟢`       | Character for each status (`busy`, `waiting`, `idle`).                                             |
 
 Sessions that belong to another window or to a terminal outside VS Code are shown with the `workspace` and `all` scopes, but are not opened from here: attaching a second client to a running session would conflict with it.
@@ -145,7 +157,7 @@ Everything specific to an agent lives in a provider under `src/providers/`. A pr
 
 ## Limitations
 
-- Claude Code's session records and transcripts are internal formats, not a documented API. If an update changes them, sessions or their activity may stop showing; Claude Code itself is unaffected.
+- Claude Code's session records, transcripts and usage cache are internal formats, not a documented API. If an update changes them, sessions, their activity or the usage rings may stop showing; Claude Code itself is unaffected.
 - So is the way Claude Code and VS Code store archived sessions. Archived sessions keep showing where it cannot be read: VS Code versions whose Node has no built-in SQLite module, and remote windows (SSH, WSL, dev containers), whose extension state stays on the local machine.
 - A status bar item takes a single text color and a single click target. That is why the dots are emoji, and why sessions are opened from the hover or the picker rather than by clicking an individual dot.
 - Window ownership needs `/proc` (Linux). Elsewhere, sessions inside the workspace folders count as this window's.
@@ -184,7 +196,7 @@ cd agent-watch
 | `test/`         | `node:test` suites; `test/helpers.js` stands in for the `vscode` module        |
 | `package.sh`    | Tests and packages the extension with `vsce` (`--install` also installs it)    |
 | `docs/render.js` | Draws the README images in `docs/images` with headless Chrome (`node docs/render.js`) |
-| `scripts/make-icons.py` | Draws the robot once and writes the status bar font glyph, the activity bar icon and the extension icon, the last two with the three status dots (`python3 scripts/make-icons.py`; needs fontTools and Chrome) |
+| `scripts/make-icons.py` | Draws the robot once and writes the status bar font glyph, the activity bar icon and the extension icon, the last two with the three status dots, plus the usage rings in the same font (`python3 scripts/make-icons.py`; needs fontTools and Chrome) |
 | `l10n/`         | Translations of the extension's own texts (`bundle.l10n.<language>.json`)      |
 | `scripts/make-sounds.js` | Synthesizes the finish blip                                                    |
 | `.github/workflows/release.yml` | Releases a new version to the Marketplace and GitHub (see [Releasing](#releasing)) |

@@ -14,6 +14,10 @@
 //                           resumable: the agent can show this session without starting a new one.
 //                           Sessions that are not are never opened, and idle ones are hidden.
 //   prune(liveIds)       forget sessions that ended
+//   usage()              -> { fetchedAt?, limits: [{ key, label, short?, used, resetsAt? }] } or undefined
+//                           (optional) how much of the plan's usage limits is spent, used in percent;
+//                           label names a limit in the hover ("5-hour limit"), short in the chip
+//                           ("5h"); a limit without short only shows in the hover
 //   canOpen(session), unavailableReason(), open(session)
 //                        how an "editor" session is shown in the agent's own chat
 //

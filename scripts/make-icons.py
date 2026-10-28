@@ -2,7 +2,8 @@
 """Draws the Agent Watch robot once and writes it everywhere it appears:
 
   media/agent-watch.woff     the status bar glyph: product icon "agent-watch-robot", U+E000
-                              (the chip's live dots follow it, so it has none of its own)
+                              (the chip's live dots follow it, so it has none of its own), and the
+                              usage rings "agent-watch-usage-0" to "-100", U+E001 to U+E00B
   media/activity.svg          the activity bar icon: the robot with three dots under its head,
                               in one color, as VS Code paints activity bar icons
   media/icon.svg, icon.png    the extension icon: the same, with the dots in their status colors
@@ -12,6 +13,7 @@ Run with `python3 scripts/make-icons.py` after changing the drawing. Needs fontT
 (pip install fonttools) and Google Chrome or Chromium for the PNG.
 """
 
+import math
 import os
 import shutil
 import subprocess
@@ -107,6 +109,55 @@ def dots(cy):
     return [circle(x, cy, DOT_R) for x in DOT_XS]
 
 
+# The usage rings: like a progress spinner, a thin circle that a thick arc fills clockwise from
+# 12 o'clock with how much of a usage limit is used, in tenths. The chip picks one per limit.
+USAGE_LEVELS = range(0, 101, 10)
+RING_R = 8.6  # Radius of the middle of the arc.
+RING_ARC = 2.1  # Half the arc's thickness.
+RING_TRACK = 0.75  # Half the thickness of the circle it fills.
+
+
+def arc(cx, cy, r, start, end):
+    """Cubic segments along a circle from angle start to end, in degrees clockwise from 12 o'clock
+    (counter-clockwise when end < start), without the move to the first point."""
+    def point(a):
+        return (cx + r * math.sin(a), cy - r * math.cos(a))
+
+    count = max(1, math.ceil(abs(end - start) / 90))
+    step = math.radians(end - start) / count
+    k = 4 / 3 * math.tan(step / 4) * r
+    segments = []
+    for i in range(count):
+        a0 = math.radians(start) + i * step
+        a1 = a0 + step
+        p0, p1 = point(a0), point(a1)
+        segments.append((
+            'C',
+            (p0[0] + k * math.cos(a0), p0[1] + k * math.sin(a0)),
+            (p1[0] - k * math.cos(a1), p1[1] - k * math.sin(a1)),
+            p1,
+        ))
+    return segments
+
+
+def ring(level):
+    contours = [circle(12, 12, RING_R + RING_TRACK), circle(12, 12, RING_R - RING_TRACK, clockwise=False)]
+    if level == 100:
+        return [circle(12, 12, RING_R + RING_ARC), circle(12, 12, RING_R - RING_ARC, clockwise=False)]
+    if level:
+        end = 360 * level / 100
+        outer, inner = RING_R + RING_ARC, RING_R - RING_ARC
+        cap_end = (12 + RING_R * math.sin(math.radians(end)), 12 - RING_R * math.cos(math.radians(end)))
+        contours.append(
+            [('M', (12, 12 - outer))]
+            + arc(12, 12, outer, 0, end)
+            + arc(*cap_end, RING_ARC, end, end + 180)  # Round end, ahead of the arc.
+            + arc(12, 12, inner, end, 0)
+            + arc(12, 12 - RING_R, RING_ARC, 180, 360)  # Round start, behind 12 o'clock.
+        )
+    return contours
+
+
 def transform(contours, scale, dx, dy):
     """Scales and moves contours drawn on the grid."""
     def point(p):
@@ -132,13 +183,11 @@ def path_data(contours, scale=1.0, dx=0.0, dy=0.0):
     return ''.join(parts)
 
 
-def write_font(path):
-    unit = 50
-    upm = 24 * unit
+def glyph(contours, unit, upm):
     tt = TTGlyphPen(None)
     # Flip y (fonts point up) and turn the cubic curves into TrueType's quadratic ones.
     pen = TransformPen(Cu2QuPen(tt, max_err=0.5), (unit, 0, 0, -unit, 0, upm))
-    for segments in robot():
+    for segments in contours:
         for segment in segments:
             if segment[0] == 'M':
                 pen.moveTo(segment[1])
@@ -147,14 +196,27 @@ def write_font(path):
             else:
                 pen.curveTo(segment[1], segment[2], segment[3])
         pen.closePath()
+    return tt.glyph()
+
+
+def write_font(path):
+    unit = 50
+    upm = 24 * unit
+    glyphs = {'robot': (0xE000, robot())}
+    for i, level in enumerate(USAGE_LEVELS):
+        glyphs[f'usage-{level}'] = (0xE001 + i, ring(level))
 
     builder = FontBuilder(upm, isTTF=True)
-    builder.setupGlyphOrder(['.notdef', 'robot'])
-    builder.setupCharacterMap({0xE000: 'robot'})
-    builder.setupGlyf({'.notdef': TTGlyphPen(None).glyph(), 'robot': tt.glyph()})
-    glyph = builder.font['glyf']['robot']
-    glyph.recalcBounds(builder.font['glyf'])
-    builder.setupHorizontalMetrics({'.notdef': (upm, 0), 'robot': (upm, glyph.xMin)})
+    builder.setupGlyphOrder(['.notdef', *glyphs])
+    builder.setupCharacterMap({code: name for name, (code, _) in glyphs.items()})
+    drawn = {name: glyph(contours, unit, upm) for name, (_, contours) in glyphs.items()}
+    builder.setupGlyf({'.notdef': TTGlyphPen(None).glyph(), **drawn})
+    metrics = {'.notdef': (upm, 0)}
+    for name in glyphs:
+        built = builder.font['glyf'][name]
+        built.recalcBounds(builder.font['glyf'])
+        metrics[name] = (upm, built.xMin)
+    builder.setupHorizontalMetrics(metrics)
     # Like VS Code's codicons: the glyph fills the em square, with no descent.
     builder.setupHorizontalHeader(ascent=upm, descent=0)
     builder.setupNameTable({'familyName': 'Agent Watch Icons', 'styleName': 'Regular'})

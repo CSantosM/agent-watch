@@ -307,6 +307,11 @@
           "default": false,
           "description": "Hide the chip when no sessions are running."
         },
+        "agentWatch.showUsage": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show how much of your Claude plan's 5-hour and weekly usage limits is used, as two rings after the dots that fill up as you use them; the hover lists every limit in detail. Read from the last reading Claude Code took; hidden when there is none, such as when signed in with an API key."
+        },
         "agentWatch.dots": {
           "type": "object",
           "default": {
@@ -360,6 +365,83 @@
         "default": {
           "fontPath": "media/agent-watch.woff",
           "fontCharacter": "\\E000"
+        }
+      },
+      "agent-watch-usage-0": {
+        "description": "A ring 0% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E001"
+        }
+      },
+      "agent-watch-usage-10": {
+        "description": "A ring 10% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E002"
+        }
+      },
+      "agent-watch-usage-20": {
+        "description": "A ring 20% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E003"
+        }
+      },
+      "agent-watch-usage-30": {
+        "description": "A ring 30% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E004"
+        }
+      },
+      "agent-watch-usage-40": {
+        "description": "A ring 40% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E005"
+        }
+      },
+      "agent-watch-usage-50": {
+        "description": "A ring 50% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E006"
+        }
+      },
+      "agent-watch-usage-60": {
+        "description": "A ring 60% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E007"
+        }
+      },
+      "agent-watch-usage-70": {
+        "description": "A ring 70% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E008"
+        }
+      },
+      "agent-watch-usage-80": {
+        "description": "A ring 80% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E009"
+        }
+      },
+      "agent-watch-usage-90": {
+        "description": "A ring 90% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E00A"
+        }
+      },
+      "agent-watch-usage-100": {
+        "description": "A ring 100% full, for how much of a usage limit is used",
+        "default": {
+          "fontPath": "media/agent-watch.woff",
+          "fontCharacter": "\\E00B"
         }
       }
     }

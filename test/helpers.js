@@ -336,6 +336,49 @@ function archiveInClaudeCode(dbPath, ids) {
   db.close();
 }
 
+// The plan usage Claude Code caches in its global config each time it fetches it: .claude.json in the
+// config directory when CLAUDE_CONFIG_DIR is set, as in the tests. Written as Claude Code writes it,
+// with one field per limit and the "limits" list /usage reads. fiveHour, sevenDay: { used, resetsAt }
+// with used in percent and resetsAt in epoch milliseconds; scoped: weekly limits of one model, each
+// also with its name.
+function cacheUsage(dir, { fiveHour, sevenDay, scoped = [], fetchedAt = Date.now() }) {
+  const resets = (l) => new Date(l.resetsAt).toISOString();
+  const field = (l) => l && { utilization: l.used, resets_at: resets(l), limit_dollars: null };
+  const entry = (kind, group, l, scope = null) => ({
+    kind,
+    group,
+    percent: l.used,
+    severity: 'normal',
+    resets_at: resets(l),
+    scope,
+    is_active: false,
+  });
+  const limits = [
+    ...(fiveHour ? [entry('session', 'session', fiveHour)] : []),
+    ...(sevenDay ? [entry('weekly_all', 'weekly', sevenDay)] : []),
+    ...scoped.map((l) => entry('weekly_scoped', 'weekly', l, { model: { id: null, display_name: l.name }, surface: null })),
+  ];
+  const file = path.join(dir, '.claude.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      numStartups: 12,
+      cachedUsageUtilization: {
+        fetchedAtMs: fetchedAt,
+        accountUuid: 'account',
+        utilization: {
+          five_hour: field(fiveHour),
+          seven_day: field(sevenDay),
+          seven_day_opus: null,
+          extra_usage: { is_enabled: false },
+          limits,
+        },
+      },
+    }),
+  );
+  fs.utimesSync(file, new Date(), new Date(Date.now() + Math.random() * 1e6)); // Seen as a change.
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -350,5 +393,6 @@ module.exports = {
   spawnForeignProcess,
   writeSession,
   archiveInClaudeCode,
+  cacheUsage,
   delay,
 };
