@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Usage limits:** right after the chip, two rings show how much of your Claude plan's 5-hour (pastel blue) and weekly (peach) usage limits is used, with the percent written inside and filling up like a progress spinner as you use them. A ring turns red from 80%, and stands out like an error once its limit is used up. The weekly ring follows whichever weekly limit is most used, a single model's included. Their hover, and the chip's, lists every limit `/usage` shows with how much is used, when it resets and when the reading was taken; a click lists them with how long until each resets (also *Agent Watch: Show Usage Limits*). Claude Code only takes a new reading now and then, so the rings dim once it is over 30 minutes old, and a limit whose window started over since then shows a question mark. They are read from the reading Claude Code caches in `~/.claude.json`, with no network calls, and hidden when there is none, such as with an API key. They stay when `agentWatch.hideWhenEmpty` hides the chip. `agentWatch.showUsage` turns them off; the colors are `agentWatch.usage.session`, `agentWatch.usage.weekly` and `agentWatch.usage.high`.
+
 ## 0.2.0 (2026-10-07)
 
 - **Archived sessions are hidden:** a session you archive in Claude Code no longer stays in the chip, hover, picker and panel while it is idle, although its process keeps running. It shows again while it works or waits for you. `agentWatch.showArchivedSessions` brings them back.

@@ -15,12 +15,13 @@ const {
   spawnForeignProcess,
   writeSession,
   archiveInClaudeCode,
+  cacheUsage,
   delay,
 } = require('./helpers');
 
 const { state } = createVscode();
 const extension = require('../extension');
-const { escapeMarkdown } = require('../src/util');
+const { escapeMarkdown, formatClock } = require('../src/util');
 
 const processes = [];
 test.after(() => processes.forEach((p) => p.kill()));
@@ -77,7 +78,8 @@ function setup(t, { preferred = 'panel', context = createContext() } = {}) {
 
 const refresh = () => state.handlers['agentWatch.refresh']();
 const open = (id) => state.handlers['agentWatch.open'](`claude-code:${id}`);
-const chip = () => state.items[state.items.length - 1];
+const chip = () => state.items.filter((i) => i.id === 'agentWatch.chip').pop();
+const ring = (key) => state.items.filter((i) => i.id === `agentWatch.usage.${key}`).pop();
 const view = () => state.views[state.views.length - 1];
 const openFolders = (...dirs) => {
   state.workspaceFolders = dirs.map((dir) => ({ uri: { fsPath: dir }, name: path.basename(dir) }));
@@ -315,6 +317,186 @@ test('escapes session titles in the trusted hover', async (t) => {
   const hover = chip().tooltip.value;
   assert.ok(!hover.includes('](command:workbench.action.terminal.new)'));
   assert.ok(!hover.includes(' $(bug)'));
+});
+
+const HOUR = 3600000;
+// A limit's line in the usage hover, its ring in the theme color given.
+const usageRow = (level, label, detail, color) => {
+  const icon = `$(agent-watch-usage-${level})`;
+  const ringHtml = color ? `<span style="color:var(--vscode-${color.replace(/\./g, '-')});">${icon}</span>` : icon;
+  return `${ringHtml} **${escapeMarkdown(label)}** · ${escapeMarkdown(detail)}`;
+};
+const at = (ms) => formatClock(ms, Date.now());
+const showUsageLimits = () => {
+  state.handlers['agentWatch.showUsageLimits']();
+  return state.quickPicks[state.quickPicks.length - 1];
+};
+
+test('two rings after the chip show how much of the 5-hour and weekly limits is used, with the percent inside', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  session({ status: 'idle' });
+  const resetsAt = Date.now() + HOUR;
+  cacheUsage(claudeDir, { fiveHour: { used: 19, resetsAt }, sevenDay: { used: 64, resetsAt } });
+  await start();
+  assert.equal(chip().text, '$(agent-watch-robot) 🟢', 'nothing after the dots');
+  for (const [key, level, label] of [['session', 'nineteen', '5-hour limit: 19% used'], ['weekly', 'sixty-four', 'Weekly limit: 64% used']]) {
+    assert.equal(ring(key).text, `$(agent-watch-usage-${level})`);
+    assert.equal(ring(key).color.id, `agentWatch.usage.${key}`);
+    assert.equal(ring(key).backgroundColor, undefined);
+    assert.equal(ring(key).visible, true);
+    assert.equal(ring(key).command, 'agentWatch.showUsageLimits');
+    assert.deepEqual(ring(key).accessibilityInformation, { label: `${label}, resets ${at(resetsAt)}`, role: 'button' });
+  }
+  assert.ok(chip().priority > ring('session').priority && ring('session').priority > ring('weekly').priority, 'chip, 5-hour, weekly, left to right');
+});
+
+test('hovering a ring shows the detail of every limit with clock times, each ring in its color', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  session({ status: 'idle' });
+  const weekly = Date.now() + 3 * 24 * HOUR + 30000;
+  const fiveHour = { used: 19, resetsAt: Date.now() + 2 * HOUR + 30000 };
+  const fetchedAt = Date.now() - 3 * 60000;
+  cacheUsage(claudeDir, { fiveHour, sevenDay: { used: 22, resetsAt: weekly }, scoped: [{ name: 'Fable', used: 6, resetsAt: weekly }], fetchedAt });
+  await start();
+  const detail = [
+    usageRow('nineteen', '5-hour limit', `19% used · resets ${at(fiveHour.resetsAt)}`, 'agentWatch.usage.session'),
+    usageRow('twenty-two', 'Weekly limit', `22% used · resets ${at(weekly)}`, 'agentWatch.usage.weekly'),
+    usageRow('six', 'Weekly limit, Fable', `6% used · resets ${at(weekly)}`, 'agentWatch.usage.weekly'),
+    `_${escapeMarkdown(`Read by Claude Code at ${at(fetchedAt)}`)}_`,
+  ].join('  \n');
+  for (const key of ['session', 'weekly']) {
+    const hover = ring(key).tooltip;
+    assert.equal(hover.value, `**Usage limits**\n\n${detail}`);
+    assert.ok(hover.isTrusted && hover.supportThemeIcons, 'trusted, or the hover drops the colored spans');
+  }
+  assert.ok(chip().tooltip.value.includes(`---\n\n**Usage limits**\n\n${detail}\n\n---`), 'the chip hover has the detail too');
+
+  const before = ring('session').tooltip;
+  await refresh();
+  assert.equal(ring('session').tooltip, before, 'no countdown redraws the hover');
+});
+
+test('clicking a ring lists the limits with how long until each resets', async (t) => {
+  const { claudeDir, start } = setup(t);
+  const fiveHour = { used: 19, resetsAt: Date.now() + 2 * HOUR + 30000 };
+  cacheUsage(claudeDir, { fiveHour, sevenDay: { used: 85, resetsAt: Date.now() + 3 * 24 * HOUR + 30000 }, fetchedAt: Date.now() - 3 * 60000 });
+  await start();
+  const qp = showUsageLimits();
+  assert.equal(qp.visible, true);
+  assert.equal(qp.title, 'Usage Limits');
+  assert.equal(qp.placeholder, 'Read by Claude Code 3 min ago');
+  assert.deepEqual(
+    qp.items.map((i) => [i.label, i.description, i.detail.replace(/, .*$/, '')]),
+    [
+      ['$(agent-watch-usage-nineteen) 5-hour limit', '19% used', 'Resets in 2 h'],
+      ['$(agent-watch-usage-eighty-five) Weekly limit', '85% used', 'Resets in 3 d'],
+    ],
+  );
+  qp.accept();
+  assert.equal(qp.visible, false);
+});
+
+test('the rings show with no sessions, even with the chip hidden by agentWatch.hideWhenEmpty', async (t) => {
+  const { claudeDir, start } = setup(t);
+  cacheUsage(claudeDir, { fiveHour: { used: 50, resetsAt: Date.now() + HOUR }, sevenDay: { used: 70, resetsAt: Date.now() + HOUR } });
+  await start();
+  assert.equal(chip().text, '$(agent-watch-robot) No agents');
+  assert.deepEqual([ring('session').text, ring('weekly').text], ['$(agent-watch-usage-fifty)', '$(agent-watch-usage-seventy)']);
+  assert.ok(chip().tooltip.value.startsWith('**Agents** · no sessions running in this window\n\n---\n\n**Usage limits**\n\n'));
+
+  state.config.agentWatch.hideWhenEmpty = true;
+  await refresh();
+  assert.deepEqual([chip().visible, ring('session').visible, ring('weekly').visible], [false, true, true]);
+});
+
+test('a ring is empty only when its limit is untouched, turns red from 80%, and stands out when used up', async (t) => {
+  const { claudeDir, start } = setup(t);
+  await start();
+  for (const [used, level, color, background] of [
+    [0, 'zero', 'agentWatch.usage.session'],
+    [7, 'seven', 'agentWatch.usage.session'],
+    [79.4, 'seventy-nine', 'agentWatch.usage.session'],
+    [80, 'eighty', 'agentWatch.usage.high'],
+    [99.6, 'ninety-nine', 'agentWatch.usage.high'],
+    [100, 'hundred', 'agentWatch.usage.high', 'statusBarItem.errorBackground'],
+  ]) {
+    cacheUsage(claudeDir, { fiveHour: { used, resetsAt: Date.now() + HOUR } });
+    await refresh();
+    assert.equal(ring('session').text, `$(agent-watch-usage-${level})`, `${used}% used`);
+    assert.equal(ring('session').color.id, color, `${used}% used`);
+    assert.equal(ring('session').backgroundColor && ring('session').backgroundColor.id, background, `${used}% used`);
+    assert.equal(ring('weekly').visible, false, 'no weekly limit in the reading');
+  }
+  assert.ok(ring('session').tooltip.value.includes(usageRow('hundred', '5-hour limit', '100% used · resets', 'agentWatch.usage.high').slice(0, -1)));
+});
+
+test('the weekly ring shows the weekly limit of one model when that one is the most used', async (t) => {
+  const { claudeDir, start } = setup(t);
+  const resetsAt = Date.now() + HOUR;
+  cacheUsage(claudeDir, { sevenDay: { used: 40, resetsAt }, scoped: [{ name: 'Fable', used: 85, resetsAt }] });
+  await start();
+  assert.equal(ring('weekly').text, '$(agent-watch-usage-eighty-five)');
+  assert.equal(ring('weekly').color.id, 'agentWatch.usage.high');
+  assert.equal(ring('weekly').accessibilityInformation.label, `Weekly limit, Fable: 85% used, resets ${at(resetsAt)}`);
+  assert.equal(ring('session').visible, false);
+});
+
+test('a limit whose window started over since the reading shows a dimmed question mark', async (t) => {
+  const { claudeDir, start } = setup(t);
+  const resetsAt = Date.now() - 12 * 60000;
+  cacheUsage(claudeDir, { fiveHour: { used: 90, resetsAt }, sevenDay: { used: 40, resetsAt: Date.now() + HOUR } });
+  await start();
+  assert.deepEqual([ring('session').text, ring('weekly').text], ['$(agent-watch-usage-unknown)', '$(agent-watch-usage-forty)']);
+  assert.equal(ring('session').color.id, 'disabledForeground');
+  const detail = `started over at ${at(resetsAt)}, not read since`;
+  assert.ok(ring('session').tooltip.value.includes(usageRow('unknown', '5-hour limit', detail, 'disabledForeground')));
+  assert.equal(ring('session').accessibilityInformation.label, `5-hour limit: ${detail}`);
+  assert.deepEqual([showUsageLimits().items[0].description, showUsageLimits().items[0].detail], ['use unknown', 'Started over 12 min ago; Claude Code has not read it since']);
+});
+
+test('an old reading dims the rings, but one nearly used up stays red', async (t) => {
+  const { claudeDir, start } = setup(t);
+  const fetchedAt = Date.now() - 2 * HOUR;
+  cacheUsage(claudeDir, { fiveHour: { used: 40, resetsAt: Date.now() + HOUR }, sevenDay: { used: 85, resetsAt: Date.now() + HOUR }, fetchedAt });
+  await start();
+  assert.deepEqual([ring('session').color.id, ring('weekly').color.id], ['disabledForeground', 'agentWatch.usage.high']);
+  assert.match(ring('session').accessibilityInformation.label, /, may be out of date$/);
+  assert.ok(ring('session').tooltip.value.endsWith(`_${escapeMarkdown(`Read by Claude Code at ${at(fetchedAt)}, may be out of date`)}_`));
+  assert.equal(showUsageLimits().placeholder, 'Read by Claude Code 2 h ago, may be out of date');
+});
+
+test('without a reading, or with agentWatch.showUsage off, there are no rings', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  session({ status: 'idle' });
+  await start();
+  assert.equal(ring('session').visible, false, 'signed in with an API key, say');
+  assert.deepEqual(showUsageLimits().items.map((i) => i.label), ['$(info) No usage limits read']);
+
+  state.config.agentWatch.showUsage = false;
+  cacheUsage(claudeDir, { fiveHour: { used: 19, resetsAt: Date.now() + HOUR }, sevenDay: { used: 22, resetsAt: Date.now() + HOUR } });
+  await refresh();
+  assert.deepEqual([ring('session').visible, ring('weekly').visible], [false, false]);
+  assert.doesNotMatch(chip().tooltip.value, /limit/);
+});
+
+test('every ring is one of the extension icons, named without digits, and the ring colors are contributed', () => {
+  const { icons, colors, commands } = require('../package.json').contributes;
+  const ones = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+    'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+  const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+  const spelled = (n) => (n === 100 ? 'hundred' : n < 20 ? ones[n] : tens[Math.floor(n / 10)] + (n % 10 ? `-${ones[n % 10]}` : ''));
+  const levels = [...Array.from({ length: 101 }, (_, i) => spelled(i)), 'unknown'];
+  levels.forEach((level, i) => {
+    const icon = icons[`agent-watch-usage-${level}`];
+    assert.ok(icon, `agent-watch-usage-${level}`);
+    assert.match(`agent-watch-usage-${level}`, /^[a-z-]+$/, 'hovers drop icons whose names have digits');
+    assert.equal(icon.default.fontPath, 'media/agent-watch.woff');
+    assert.equal(icon.default.fontCharacter, `\\E${(i + 1).toString(16).toUpperCase().padStart(3, '0')}`);
+  });
+  assert.equal(Object.keys(icons).filter((name) => name.startsWith('agent-watch-usage-')).length, levels.length);
+  assert.deepEqual(colors.map((c) => c.id), ['agentWatch.usage.session', 'agentWatch.usage.weekly', 'agentWatch.usage.high']);
+  for (const c of colors) assert.deepEqual(Object.keys(c.defaults), ['dark', 'light', 'highContrast', 'highContrastLight']);
+  assert.ok(commands.some((c) => c.command === 'agentWatch.showUsageLimits'));
 });
 
 test('opens an existing session without starting a chat or touching settings', async (t) => {
