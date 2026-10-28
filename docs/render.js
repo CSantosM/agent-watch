@@ -213,7 +213,7 @@ function chip({ color, label: text = '', working = 0, dots = '', more = '', filt
 }
 
 const bell = () => `<div class="item">${icon('bell')}</div>`;
-const sessionDots = () => SESSIONS.map((s) => DOT[s.status]).join('');
+const sessionDots = (sessions = SESSIONS) => sessions.map((s) => DOT[s.status]).join('');
 
 function statusBar(chipHtml) {
   return `<div class="statusbar">
@@ -232,19 +232,19 @@ function editor(file = 'room.service.ts') {
   return `<div class="tabs"><div class="tab"><span class="lang">TS</span>${file}</div></div><div class="code">${lines}</div>`;
 }
 
-function hoverCard() {
+function hoverCard(sessions = SESSIONS) {
   const link = (text) => `<a>${text}</a>`;
   const counts = { busy: 0, waiting: 0, idle: 0 };
-  SESSIONS.forEach((s) => (counts[s.status] += 1));
-  const rows = SESSIONS.map((s, i) => {
+  sessions.forEach((s) => (counts[s.status] += 1));
+  const rows = sessions.map((s, i) => {
     let row = `${DOT[s.status]} <code>${i + 1}</code> ${link(esc(s.title))}<br>${s.label} · ${esc(s.since)} · ${esc(s.folder)} · ${esc(s.branch)}`;
     if (s.waitingFor) row += `<br><em>${esc(s.waitingFor)}</em>`;
     if (s.action) row += `<br>${icon(s.action.icon)} ${esc(s.action.text)}`;
     return `<p>${row}</p>`;
   }).join('');
   return `<div class="hover" style="right: 20px; bottom: 26px;">
-  <p><strong>Agents</strong> · ${SESSIONS.length} sessions in this window, 2 working</p>
-  <p>Filter: <strong>All (${SESSIONS.length})</strong> · ${link(`Working (${counts.busy})`)} · ${link(`Waiting (${counts.waiting})`)} · ${link(`Idle (${counts.idle})`)}</p>
+  <p><strong>Agents</strong> · ${sessions.length} sessions in this window, ${counts.busy} working</p>
+  <p>Filter: <strong>All (${sessions.length})</strong> · ${link(`Working (${counts.busy})`)} · ${link(`Waiting (${counts.waiting})`)} · ${link(`Idle (${counts.idle})`)}</p>
   <hr>${rows}<hr>
   <p>${USAGE.map((u) => `${battery(u.left)} <strong>${u.label} limit</strong> · ${u.left}% left (${100 - u.left}% used) · resets in ${u.resets}`).join('<br>')}<br><em>Read by Claude Code 1 min ago</em></p><hr>
   <p>${link(`${icon('list-selection')} Open session picker`)} · ${link(`${icon('layout-sidebar-left')} Show panel`)}</p>
@@ -326,6 +326,15 @@ const IMAGES = [
     height: 560,
     body: `<div class="frame" style="width: 820px; height: 560px;">${editor()}${hoverCard()}${statusBar(
       chip({ color: COLORS.waiting, working: 2, dots: sessionDots(), usage: batteries(), hovered: true }),
+    )}</div>`,
+  },
+  {
+    // The usage limits up close: two sessions, so the batteries in the chip and the hover stand out.
+    name: 'usage.png',
+    width: 820,
+    height: 400,
+    body: `<div class="frame" style="width: 820px; height: 400px;">${editor()}${hoverCard(SESSIONS.slice(0, 2))}${statusBar(
+      chip({ color: COLORS.waiting, working: 1, dots: sessionDots(SESSIONS.slice(0, 2)), usage: batteries(), hovered: true }),
     )}</div>`,
   },
   {

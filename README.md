@@ -46,6 +46,10 @@ This is a community project, not affiliated with or endorsed by Anthropic.
 
 After the dots, two batteries show what is left of your Claude plan's usage limits, the ones Claude Code's `/usage` shows: `5h` for the 5-hour session limit and `7d` for the weekly one. Like a phone's battery, each one drains as you use the plan, and the number next to it is the percent left: `5h 81%` means 19% of the 5-hour limit is used. Hover the chip to see how much of each is used and when it resets.
 
+<p align="center">
+  <img src="docs/images/usage.png" width="820" alt="The chip at the right of the status bar: a red robot, a yellow and a red dot, then 5h with a battery four fifths full and 81%, and 7d with a battery about two thirds full and 64%. Above it, the hover card lists the two sessions and, under them, a battery for each limit: 5-hour limit, 81% left (19% used), resets in 2 h 14 min; Weekly limit, 64% left (36% used), resets in 3 d; and in italics, Read by Claude Code 1 min ago.">
+</p>
+
 The figures are the last reading Claude Code took, which it keeps in its global config (`~/.claude.json`). Claude Code only takes a new reading while it runs, so the hover says how old it is, and a limit whose window ended since then shows full. With no reading, such as when Claude Code is signed in with an API key, the batteries are hidden. `agentWatch.showUsage` turns them off.
 
 ### The panel
