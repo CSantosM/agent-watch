@@ -27,6 +27,7 @@ const CMD = {
   openFile: 'agentWatch.openFile',
   groupByBranch: 'agentWatch.groupByBranch',
   ungroup: 'agentWatch.ungroup',
+  showUsageLimits: 'agentWatch.showUsageLimits',
 };
 const VIEW_ID = 'agentWatch.sessions';
 // Documents with a file's content at a commit, for the left side of a diff.
@@ -53,8 +54,15 @@ const USAGE_RINGS = [
   { key: 'session', id: 'agentWatch.usage.session', name: 'Agent Watch: 5-Hour Limit', priority: -10001 },
   { key: 'weekly', id: 'agentWatch.usage.weekly', name: 'Agent Watch: Weekly Limit', priority: -10002 },
 ];
-// The ring glyphs by tenths used (scripts/make-icons.py); hovers drop icons whose names have digits.
-const USAGE_LEVELS = ['zero', 'ten', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred'];
+// From this percent on, a limit's ring turns red: the plan is about to stop every agent.
+const HIGH_USAGE = 80;
+// A reading older than this may be well behind: Claude Code only takes one now and then.
+const STALE_USAGE_MS = 30 * 60 * 1000;
+// The ring glyphs are named by the percent spelled out (scripts/make-icons.py): hovers drop icons
+// whose names have digits.
+const ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+  'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
 
 const TICK_MS = 5000;
 const DEBOUNCE_MS = 150;
@@ -123,7 +131,7 @@ class AgentWatch {
     this.rings = USAGE_RINGS.map((ring) => {
       const item = vscode.window.createStatusBarItem(ring.id, vscode.StatusBarAlignment.Right, ring.priority);
       item.name = ring.name;
-      item.color = new vscode.ThemeColor(ring.id);
+      item.command = CMD.showUsageLimits;
       return { ...ring, item, rendered: {} };
     });
 
@@ -167,6 +175,7 @@ class AgentWatch {
       vscode.commands.registerCommand(CMD.openFile, (target, file) => this.openFile(target, file)),
       vscode.commands.registerCommand(CMD.groupByBranch, () => setGroupBy('branch')),
       vscode.commands.registerCommand(CMD.ungroup, () => setGroupBy('none')),
+      vscode.commands.registerCommand(CMD.showUsageLimits, () => this.showUsageLimits()),
       vscode.workspace.registerTextDocumentContentProvider(BASE_SCHEME, {
         provideTextDocumentContent: (uri) => {
           const query = new URLSearchParams(uri.query);
@@ -530,10 +539,11 @@ class AgentWatch {
     const visible = this.visible();
     this.renderView(all);
     const limits = usageLimits(this.usage, Date.now());
+    // The rings stay with no sessions, hidden chip or not: the usage left matters most before starting one.
+    this.renderRings(limits);
     if (!all.length && cfg.hideWhenEmpty) {
       this.item.hide();
       this.rendered.visible = false;
-      this.renderRings([]);
       return;
     }
 
@@ -575,23 +585,36 @@ class AgentWatch {
       this.item.show();
       this.rendered.visible = true;
     }
-    this.renderRings(limits);
   }
 
-  // Like a progress spinner, a ring per usage limit in USAGE_RINGS fills up as the plan is used, in
-  // its own color after the chip. Hovering either one shows the detail of every limit.
+  // Like a progress spinner, a ring per usage limit in USAGE_RINGS fills up as the plan is used, with
+  // the percent inside, in its own color after the chip: red once nearly used up, dimmed while unknown
+  // or read long ago. Hovering either one shows the detail of every limit; clicking it, how long until
+  // each resets.
   renderRings(limits) {
-    const tooltip = limits.length ? ['**Usage limits**', usageHover(limits, this.usage, Date.now())].join('\n\n') : '';
+    const now = Date.now();
+    const tooltip = limits.length ? usageHover(limits, this.usage, now) : '';
     for (const ring of this.rings) {
       const { item, rendered } = ring;
-      const limit = limits.find((l) => l.key === ring.key);
+      const limit = ringLimit(ring, limits);
       if (!limit) {
         if (rendered.visible) item.hide();
         rendered.visible = false;
         continue;
       }
-      const text = `$(${usageIcon(limit.used)})`;
+      const text = `$(${usageIcon(limit)})`;
       if (text !== rendered.text) item.text = rendered.text = text;
+      const color = usageColor(limit);
+      if (color !== rendered.color) {
+        item.color = new vscode.ThemeColor(color);
+        rendered.color = color;
+      }
+      // A used-up limit stands out like an error: VS Code then picks the foreground that reads on it.
+      const background = limit.used === 100 ? 'statusBarItem.errorBackground' : '';
+      if (background !== rendered.background) {
+        item.backgroundColor = background ? new vscode.ThemeColor(background) : undefined;
+        rendered.background = background;
+      }
       if (tooltip !== rendered.tooltip) {
         const md = new vscode.MarkdownString(tooltip);
         md.supportThemeIcons = true;
@@ -599,7 +622,8 @@ class AgentWatch {
         item.tooltip = md;
         rendered.tooltip = tooltip;
       }
-      item.accessibilityInformation = { label: `${limit.label}: ${limit.used}% used` };
+      const detail = usageDetail(limit, now).replace(/ · /g, ', ');
+      item.accessibilityInformation = { label: `${limit.label}: ${detail}${limit.stale ? ', may be out of date' : ''}`, role: 'button' };
       if (!rendered.visible) item.show();
       rendered.visible = true;
     }
@@ -773,6 +797,32 @@ class AgentWatch {
       qp.dispose();
       if (backToSessions) this.showSessions();
     });
+    qp.show();
+  }
+
+  // The usage limits in a picker, with how long until each resets: what the rings' hover shows, on a
+  // click or from the Command Palette.
+  showUsageLimits() {
+    const now = Date.now();
+    const limits = usageLimits(this.usage, now);
+    const qp = vscode.window.createQuickPick();
+    qp.title = 'Usage Limits';
+    qp.placeholder = this.usage
+      .filter((r) => r.fetchedAt)
+      .map((r) => `Read by ${r.providerLabel} ${formatElapsed(now - r.fetchedAt)} ago${isStale(r, now) ? ', may be out of date' : ''}`)
+      .join(' · ');
+    qp.items = limits.length
+      ? limits.map((l) => ({
+          label: `$(${usageIcon(l)}) ${l.label}`,
+          description: l.used === undefined ? 'use unknown' : `${l.used}% used`,
+          detail:
+            l.used === undefined
+              ? `Started over ${formatElapsed(now - l.resetsAt)} ago; Claude Code has not read it since`
+              : l.resetsAt && `Resets in ${formatElapsed(l.resetsAt - now)}, ${formatClock(l.resetsAt, now)}`,
+        }))
+      : [{ label: '$(info) No usage limits read', detail: 'Claude Code keeps them when signed in with a Claude plan, once it fetches them' }];
+    qp.onDidAccept(() => qp.hide());
+    qp.onDidHide(() => qp.dispose());
     qp.show();
   }
 
@@ -1013,41 +1063,80 @@ function whereElse(s) {
   return s.surface === 'editor' ? 'another VS Code window' : 'a terminal outside VS Code';
 }
 
-// How much of each usage limit is used now, in whole percent. A limit whose window ended after the
-// reading was taken has started over, although no newer reading says so yet.
+// How much of each usage limit is used now, in whole percent, and whether its reading is old. A limit
+// whose window ended after the reading has started over, and nothing says yet how much of the new one
+// is used. An old reading may be behind, but a window's use only grows: it is still used at least that
+// much.
 function usageLimits(readings, now) {
   return readings.flatMap((r) =>
     r.limits.map((l) => {
       const reset = l.resetsAt !== undefined && l.resetsAt <= now;
-      return { ...l, reset, used: reset ? 0 : Math.round(l.used) };
+      // Only a used-up limit reads 100: one at 99.6% still has a little left.
+      const used = reset ? undefined : l.used >= 100 ? 100 : Math.min(99, Math.round(l.used));
+      return { ...l, used, stale: isStale(r, now) };
     }),
   );
 }
 
-// The ring for how much of a limit is used, in tenths (media/agent-watch.woff, drawn by
-// scripts/make-icons.py). Only an untouched limit looks empty, and only one used up full.
-function usageIcon(used) {
-  const tenths = used <= 0 ? 0 : used >= 100 ? 10 : Math.min(9, Math.max(1, Math.round(used / 10)));
-  return `agent-watch-usage-${USAGE_LEVELS[tenths]}`;
+function isStale(reading, now) {
+  return reading.fetchedAt !== undefined && now - reading.fetchedAt > STALE_USAGE_MS;
 }
 
-// The detail of every limit in the hover, as /usage lists them, then how old each reading is: Claude
-// Code only updates it while it runs.
+// The ring in USAGE_RINGS for a limit: the weekly one also stands for the weekly limits of one model.
+function ringFor(limit) {
+  return USAGE_RINGS.find((r) => limit.key === r.key || limit.key.startsWith(`${r.key}:`));
+}
+
+// The limit a ring shows: the most used of its own, so the weekly ring fills up with the weekly limit
+// of one model when that one runs out first.
+function ringLimit(ring, limits) {
+  const use = (l) => (l.used === undefined ? -1 : l.used);
+  return limits
+    .filter((l) => (ringFor(l) || {}).key === ring.key)
+    .reduce((worst, l) => (worst && use(worst) >= use(l) ? worst : l), undefined);
+}
+
+// The ring for a limit (media/agent-watch.woff, drawn by scripts/make-icons.py): filled as much as it
+// is used, with the percent inside, or a question mark while unknown.
+function usageIcon(limit) {
+  const { used } = limit;
+  if (used === undefined) return 'agent-watch-usage-unknown';
+  if (used === 100) return 'agent-watch-usage-hundred';
+  if (used < 20) return `agent-watch-usage-${ONES[used]}`;
+  return `agent-watch-usage-${TENS[Math.floor(used / 10)]}${used % 10 ? `-${ONES[used % 10]}` : ''}`;
+}
+
+// A limit's theme color: red once nearly used up, however old the reading, since a window's use only
+// grows; dimmed while unknown or read long ago; otherwise its ring's.
+function usageColor(limit) {
+  if (limit.used >= HIGH_USAGE) return 'agentWatch.usage.high';
+  if (limit.used === undefined || limit.stale) return 'disabledForeground';
+  const ring = ringFor(limit);
+  return ring && ring.id;
+}
+
+// A limit's detail, with clock times rather than countdowns, so the hover only changes with the reading.
+function usageDetail(limit, now) {
+  if (limit.used === undefined) return `started over at ${formatClock(limit.resetsAt, now)}, not read since`;
+  return `${limit.used}% used${limit.resetsAt ? ` · resets ${formatClock(limit.resetsAt, now)}` : ''}`;
+}
+
+// The detail of every limit in the hover, as /usage lists them, then when each reading was taken:
+// Claude Code only takes one now and then.
 function usageHover(limits, readings, now) {
   const lines = limits.map((l) => {
-    let detail = `${l.used}% used`;
-    if (l.reset) detail += ` · reset ${formatElapsed(now - l.resetsAt)} ago`;
-    else if (l.resetsAt) detail += ` · resets in ${formatElapsed(l.resetsAt - now)} (${formatClock(l.resetsAt, now)})`;
     // Each ring in its status bar color: trusted hovers keep a span colored with a theme color.
-    const ring = USAGE_RINGS.find((r) => r.key === l.key);
-    const icon = `$(${usageIcon(l.used)})`;
-    const colored = ring ? `<span style="color:var(--vscode-${ring.id.replace(/\./g, '-')});">${icon}</span>` : icon;
-    return `${colored} **${escapeMarkdown(l.label)}** · ${escapeMarkdown(detail)}`;
+    const color = usageColor(l);
+    const icon = `$(${usageIcon(l)})`;
+    const colored = color ? `<span style="color:var(--vscode-${color.replace(/\./g, '-')});">${icon}</span>` : icon;
+    return `${colored} **${escapeMarkdown(l.label)}** · ${escapeMarkdown(usageDetail(l, now))}`;
   });
   for (const r of readings) {
-    if (r.fetchedAt) lines.push(`_${escapeMarkdown(`Read by ${r.providerLabel} ${formatElapsed(now - r.fetchedAt)} ago`)}_`);
+    if (!r.fetchedAt) continue;
+    const read = `Read by ${r.providerLabel} at ${formatClock(r.fetchedAt, now)}${isStale(r, now) ? ', may be out of date' : ''}`;
+    lines.push(`_${escapeMarkdown(read)}_`);
   }
-  return lines.join('  \n');
+  return ['**Usage limits**', lines.join('  \n')].join('\n\n');
 }
 
 function urgentColor(sessions) {

@@ -66,12 +66,18 @@ const COLORS = { waiting: '#F44336', busy: '#FBC02D', idle: '#CCCCCC' };
 const DOT = { busy: '🟡', waiting: '🔴', idle: '🟢' };
 
 // How much of the plan's usage limits is used, as the rings after the chip and their hover show it.
-// The ring colors are the dark defaults of agentWatch.usage.session and .weekly in package.json.
+// The ring colors are the dark defaults of agentWatch.usage.session, .weekly and .high in package.json,
+// and Dark Modern's disabledForeground and statusBarItem.errorBackground.
+const RING_COLORS = { session: '#9DC8F2', weekly: '#F7C59F', high: '#F28B82', dim: '#CCCCCC80', error: '#C72E0F' };
 const USAGE = [
-  { label: '5-hour limit', used: 19, resets: '2 h 14 min (19:59)', color: '#9DC8F2' },
-  { label: 'Weekly limit', used: 36, resets: '3 d (Sun 1 Nov, 12:59)', color: '#F7C59F' },
-  { label: 'Weekly limit, Fable', used: 8, resets: '3 d (Sun 1 Nov, 12:59)' },
+  { label: '5-hour limit', used: 19, resets: '19:59', color: RING_COLORS.session, ring: true },
+  { label: 'Weekly limit', used: 36, resets: 'Sun 1 Nov, 12:59', color: RING_COLORS.weekly, ring: true },
+  { label: 'Weekly limit, Fable', used: 8, resets: 'Sun 1 Nov, 12:59', color: RING_COLORS.weekly },
 ];
+// The rings running out, and with an old reading: red from 80%, an exclamation mark once used up, and
+// dimmed, with a question mark for a window that started over since.
+const RUNNING_OUT = [{ used: 86, color: RING_COLORS.high }, { used: 100, color: '#FFFFFF', background: RING_COLORS.error }];
+const OLD_READING = [{ color: RING_COLORS.dim }, { used: 41, color: RING_COLORS.dim }];
 
 const SESSIONS = [
   {
@@ -128,15 +134,20 @@ const esc = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').
 const icon = (name) => `<span class="codicon">&#${ICONS[name]};</span>`;
 // The extension's own robot and usage rings, from media/agent-watch.woff (scripts/make-icons.py).
 const robot = () => '<span class="codicon own">&#xE000;</span>';
+// One glyph per percent from U+E001, then the question mark for an unknown use.
 const ring = (u) =>
-  `<span class="codicon own"${u.color ? ` style="color: ${u.color}"` : ''}>&#x${(0xe001 + Math.max(1, Math.round(u.used / 10))).toString(16)};</span>`;
+  `<span class="codicon own"${u.color ? ` style="color: ${u.color}"` : ''}>&#x${(0xe001 + (u.used === undefined ? 101 : u.used)).toString(16)};</span>`;
 // The two rings after the chip, each a status bar item of its own color.
-const rings = (hovered = false) =>
-  USAGE.filter((u) => u.color)
-    .map((u, i) => `<div class="item${hovered && i === 0 ? ' hovered' : ''}">${ring(u)}</div>`)
+const rings = ({ hovered = false, list = USAGE.filter((u) => u.ring) } = {}) =>
+  list
+    .map(
+      (u, i) =>
+        `<div class="item${hovered && i === 0 ? ' hovered' : ''}"${u.background ? ` style="background: ${u.background}"` : ''}>${ring(u)}</div>`,
+    )
     .join('');
 const usageLines = () =>
-  `${USAGE.map((u) => `${ring(u)} <strong>${u.label}</strong> · ${u.used}% used · resets in ${u.resets}`).join('<br>')}<br><em>Read by Claude Code 1 min ago</em>`;
+  `<p><strong>Usage limits</strong></p>
+  <p>${USAGE.map((u) => `${ring(u)} <strong>${u.label}</strong> · ${u.used}% used · resets ${u.resets}`).join('<br>')}<br><em>Read by Claude Code at 17:43</em></p>`;
 // The activity bar icon, robot and dots, painted in the activity bar's color like VS Code does.
 const activityIcon = () =>
   fs
@@ -254,7 +265,7 @@ function hoverCard(sessions = SESSIONS) {
   <p><strong>Agents</strong> · ${sessions.length} sessions in this window, ${counts.busy} working</p>
   <p>Filter: <strong>All (${sessions.length})</strong> · ${link(`Working (${counts.busy})`)} · ${link(`Waiting (${counts.waiting})`)} · ${link(`Idle (${counts.idle})`)}</p>
   <hr>${rows}<hr>
-  <p>${usageLines()}</p><hr>
+  ${usageLines()}<hr>
   <p>${link(`${icon('list-selection')} Open session picker`)} · ${link(`${icon('layout-sidebar-left')} Show panel`)}</p>
 </div>`;
 }
@@ -324,7 +335,9 @@ const STATES = [
   { caption: 'Someone needs you', note: 'The robot turns red', chip: { color: COLORS.waiting, working: 2, dots: sessionDots() } },
   { caption: 'Filtered to Waiting', note: 'A funnel shows while a filter is on', chip: { color: COLORS.waiting, working: 2, dots: '🔴', filter: true } },
   { caption: 'More than 8 sessions', note: 'The rest are grouped as +N', chip: { color: COLORS.busy, working: 3, dots: '🟢🟡🟢🟡🟢🟢🟡🟢', more: '+3' } },
-  { caption: 'Plan usage', note: '5-hour and weekly limits used', chip: { color: COLORS.busy, working: 1, dots: '🟢🟡🟢' }, rings: true },
+  { caption: 'Plan usage', note: '5-hour and weekly limits used', chip: { color: COLORS.busy, working: 1, dots: '🟢🟡🟢' }, rings: {} },
+  { caption: 'Running out', note: 'Red from 80%, then used up', chip: { color: COLORS.busy, working: 1, dots: '🟢🟡🟢' }, rings: { list: RUNNING_OUT } },
+  { caption: 'Old reading', note: 'Dimmed; ? if it started over', chip: { color: COLORS.idle, dots: '🟢🟢' }, rings: { list: OLD_READING } },
 ];
 
 const IMAGES = [
@@ -342,9 +355,8 @@ const IMAGES = [
     width: 820,
     height: 300,
     body: `<div class="frame" style="width: 820px; height: 300px;">${editor()}<div class="hover" style="right: 46px; bottom: 26px;">
-  <p><strong>Usage limits</strong></p>
-  <p>${usageLines()}</p>
-</div>${statusBar(chip({ color: COLORS.waiting, working: 1, dots: sessionDots(SESSIONS.slice(0, 2)) }) + rings(true))}</div>`,
+  ${usageLines()}
+</div>${statusBar(chip({ color: COLORS.waiting, working: 1, dots: sessionDots(SESSIONS.slice(0, 2)) }) + rings({ hovered: true }))}</div>`,
   },
   {
     name: 'panel.png',
@@ -363,7 +375,7 @@ const IMAGES = [
     width: 560,
     height: 20 * 2 + STATES.length * 38 + (STATES.length - 1) * 10,
     body: `<div class="states">${STATES.map(
-      (s) => `<div class="state"><div class="caption">${s.caption}<small>${s.note}</small></div><div class="bar">${chip(s.chip)}${s.rings ? rings() : ''}${bell()}</div></div>`,
+      (s) => `<div class="state"><div class="caption">${s.caption}<small>${s.note}</small></div><div class="bar">${chip(s.chip)}${s.rings ? rings(s.rings) : ''}${bell()}</div></div>`,
     ).join('')}</div>`,
   },
 ];

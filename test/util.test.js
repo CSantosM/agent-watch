@@ -46,8 +46,9 @@ test('withTimeout reports values, timeouts and early rejections', async () => {
   await delay(50);
 });
 
-test('formatClock says the time on the same day, and the day too on another', () => {
+test('formatClock says the time on the same day, and the day too on another, in the given locale', () => {
   const now = new Date(2026, 9, 28, 16, 45).getTime();
-  assert.equal(formatClock(new Date(2026, 9, 28, 19, 59).getTime(), now), '19:59');
-  assert.equal(formatClock(new Date(2026, 10, 1, 12, 59).getTime(), now), 'Sun 1 Nov, 12:59');
+  assert.equal(formatClock(new Date(2026, 9, 28, 19, 59).getTime(), now, 'en-GB'), '19:59');
+  assert.equal(formatClock(new Date(2026, 10, 1, 12, 59).getTime(), now, 'en-GB'), 'Sun 1 Nov, 12:59');
+  assert.equal(formatClock(new Date(2026, 9, 28, 19, 59).getTime(), now, 'en-US'), '07:59 PM');
 });
