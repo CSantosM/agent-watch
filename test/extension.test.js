@@ -15,6 +15,7 @@ const {
   spawnForeignProcess,
   writeSession,
   archiveInClaudeCode,
+  cacheUsage,
   delay,
 } = require('./helpers');
 
@@ -315,6 +316,74 @@ test('escapes session titles in the trusted hover', async (t) => {
   const hover = chip().tooltip.value;
   assert.ok(!hover.includes('](command:workbench.action.terminal.new)'));
   assert.ok(!hover.includes(' $(bug)'));
+});
+
+const HOUR = 3600000;
+
+test('the chip shows what is left of the 5-hour and weekly limits as two batteries', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  session({ status: 'idle' });
+  cacheUsage(claudeDir, {
+    fiveHour: { used: 19, resetsAt: Date.now() + 2 * HOUR + 30000 },
+    sevenDay: { used: 22, resetsAt: Date.now() + 3 * 24 * HOUR + 30000 },
+    fetchedAt: Date.now() - 3 * 60000,
+  });
+  await start();
+  assert.equal(chip().text, '$(agent-watch-robot) 🟢 5h $(agent-watch-battery-80) 81% 7d $(agent-watch-battery-80) 78%');
+  const hover = chip().tooltip.value;
+  assert.ok(hover.includes(`$(agent-watch-battery-80) **5-hour limit** · ${escapeMarkdown('81% left (19% used) · resets in 2 h')}`), hover);
+  assert.ok(hover.includes(`$(agent-watch-battery-80) **Weekly limit** · ${escapeMarkdown('78% left (22% used) · resets in 3 d')}`), hover);
+  assert.ok(hover.includes(`_${escapeMarkdown('Read by Claude Code 3 min ago')}_`), 'Claude Code only updates it while it runs');
+  assert.match(chip().accessibilityInformation.label, /Usage left: 5-hour limit 81%, weekly limit 78%$/);
+});
+
+test('the batteries show with no sessions too', async (t) => {
+  const { claudeDir, start } = setup(t);
+  cacheUsage(claudeDir, { fiveHour: { used: 50, resetsAt: Date.now() + HOUR }, sevenDay: { used: 70, resetsAt: Date.now() + HOUR } });
+  await start();
+  assert.equal(chip().text, '$(agent-watch-robot) No agents 5h $(agent-watch-battery-50) 50% 7d $(agent-watch-battery-30) 30%');
+  assert.match(chip().tooltip.value, /^\*\*Agents\*\* · no sessions running in this window\n\n---\n\n\$\(agent-watch-battery-50\) \*\*5-hour limit\*\*/);
+});
+
+test('a battery looks empty only when its limit is used up, and full only when untouched', async (t) => {
+  const { claudeDir, start } = setup(t);
+  await start();
+  for (const [used, battery, left] of [[100, 0, 0], [97, 10, 3], [62, 40, 38], [4, 90, 96], [0, 100, 100]]) {
+    cacheUsage(claudeDir, { fiveHour: { used, resetsAt: Date.now() + HOUR } });
+    await refresh();
+    assert.ok(chip().text.endsWith(` 5h $(agent-watch-battery-${battery}) ${left}%`), chip().text);
+  }
+});
+
+test('a limit whose window ended since the reading shows a full battery', async (t) => {
+  const { claudeDir, start } = setup(t);
+  cacheUsage(claudeDir, {
+    fiveHour: { used: 90, resetsAt: Date.now() - 12 * 60000 },
+    sevenDay: { used: 40, resetsAt: Date.now() + HOUR },
+  });
+  await start();
+  assert.ok(chip().text.endsWith(' 5h $(agent-watch-battery-100) 100% 7d $(agent-watch-battery-60) 60%'), chip().text);
+  assert.ok(chip().tooltip.value.includes('**5-hour limit** · reset 12 min ago'));
+});
+
+test('agentWatch.showUsage turns the batteries off', async (t) => {
+  const { claudeDir, session, start } = setup(t);
+  state.config.agentWatch.showUsage = false;
+  session({ status: 'idle' });
+  cacheUsage(claudeDir, { fiveHour: { used: 19, resetsAt: Date.now() + HOUR } });
+  await start();
+  assert.equal(chip().text, '$(agent-watch-robot) 🟢');
+  assert.doesNotMatch(chip().tooltip.value, /limit/);
+});
+
+test('every battery the chip can show is one of the extension icons', () => {
+  const { icons } = require('../package.json').contributes;
+  for (let level = 0; level <= 100; level += 10) {
+    const icon = icons[`agent-watch-battery-${level}`];
+    assert.ok(icon, `agent-watch-battery-${level}`);
+    assert.equal(icon.default.fontPath, 'media/agent-watch.woff');
+    assert.equal(icon.default.fontCharacter, `\\E${(level / 10 + 1).toString(16).toUpperCase().padStart(3, '0')}`);
+  }
 });
 
 test('opens an existing session without starting a chat or touching settings', async (t) => {

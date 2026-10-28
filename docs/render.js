@@ -65,6 +65,12 @@ const PANEL_COLORS = { busy: '#cca700', waiting: '#f14c4c', idle: '#89d185' };
 const COLORS = { waiting: '#F44336', busy: '#FBC02D', idle: '#CCCCCC' };
 const DOT = { busy: '🟡', waiting: '🔴', idle: '🟢' };
 
+// What is left of the plan's usage limits, as the batteries after the dots show it.
+const USAGE = [
+  { short: '5h', label: '5-hour', left: 81, resets: '2 h 14 min' },
+  { short: '7d', label: 'Weekly', left: 64, resets: '3 d' },
+];
+
 const SESSIONS = [
   {
     title: 'fix/login-redirect',
@@ -118,8 +124,10 @@ const CODE = [
 const ROBOT_FONT = path.join(__dirname, '..', 'media', 'agent-watch.woff');
 const esc = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const icon = (name) => `<span class="codicon">&#${ICONS[name]};</span>`;
-// The extension's own robot, from media/agent-watch.woff (scripts/make-icons.py).
-const robot = () => '<span class="codicon robot">&#xE000;</span>';
+// The extension's own robot and usage batteries, from media/agent-watch.woff (scripts/make-icons.py).
+const robot = () => '<span class="codicon own">&#xE000;</span>';
+const battery = (left) => `<span class="codicon own">&#x${(0xe001 + Math.round(left / 10)).toString(16)};</span>`;
+const batteries = () => USAGE.map((u) => `${u.short} ${battery(u.left)} ${u.left}%`).join(' ');
 // The activity bar icon, robot and dots, painted in the activity bar's color like VS Code does.
 const activityIcon = () =>
   fs
@@ -133,7 +141,7 @@ function css() {
   return `
 @font-face { font-family: codicon; src: url(data:font/ttf;base64,${font}) format("truetype"); }
 @font-face { font-family: agent-watch; src: url(data:font/woff;base64,${robotFont}) format("woff"); }
-.codicon.robot { font-family: agent-watch; }
+.codicon.own { font-family: agent-watch; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: #1f1f1f; color: #cccccc; font-family: "Noto Sans", "Ubuntu", sans-serif; -webkit-font-smoothing: antialiased; }
 .codicon { font-family: codicon; font-size: 16px; line-height: 1; display: inline-block; vertical-align: -3px; }
@@ -193,13 +201,14 @@ html, body { margin: 0; background: #1f1f1f; color: #cccccc; font-family: "Noto 
 `;
 }
 
-function chip({ color, label: text = '', working = 0, dots = '', more = '', filter = false, hovered = false }) {
+function chip({ color, label: text = '', working = 0, dots = '', more = '', filter = false, usage = '', hovered = false }) {
   let label = robot();
   if (text) label += ` ${text}`;
   if (working) label += ` ${working}`;
   if (dots) label += ` ${dots}`;
   if (more) label += ` ${more}`;
   if (filter) label += ` ${icon('filter')}`;
+  if (usage) label += ` ${usage}`;
   return `<div class="item${hovered ? ' hovered' : ''}" style="color: ${color}">${label}</div>`;
 }
 
@@ -237,6 +246,7 @@ function hoverCard() {
   <p><strong>Agents</strong> · ${SESSIONS.length} sessions in this window, 2 working</p>
   <p>Filter: <strong>All (${SESSIONS.length})</strong> · ${link(`Working (${counts.busy})`)} · ${link(`Waiting (${counts.waiting})`)} · ${link(`Idle (${counts.idle})`)}</p>
   <hr>${rows}<hr>
+  <p>${USAGE.map((u) => `${battery(u.left)} <strong>${u.label} limit</strong> · ${u.left}% left (${100 - u.left}% used) · resets in ${u.resets}`).join('<br>')}<br><em>Read by Claude Code 1 min ago</em></p><hr>
   <p>${link(`${icon('list-selection')} Open session picker`)} · ${link(`${icon('layout-sidebar-left')} Show panel`)}</p>
 </div>`;
 }
@@ -306,6 +316,7 @@ const STATES = [
   { caption: 'Someone needs you', note: 'The robot turns red', chip: { color: COLORS.waiting, working: 2, dots: sessionDots() } },
   { caption: 'Filtered to Waiting', note: 'A funnel shows while a filter is on', chip: { color: COLORS.waiting, working: 2, dots: '🔴', filter: true } },
   { caption: 'More than 8 sessions', note: 'The rest are grouped as +N', chip: { color: COLORS.busy, working: 3, dots: '🟢🟡🟢🟡🟢🟢🟡🟢', more: '+3' } },
+  { caption: 'Plan usage', note: '5-hour and weekly limits left', chip: { color: COLORS.busy, working: 1, dots: '🟢🟡🟢', usage: batteries() } },
 ];
 
 const IMAGES = [
@@ -314,7 +325,7 @@ const IMAGES = [
     width: 820,
     height: 560,
     body: `<div class="frame" style="width: 820px; height: 560px;">${editor()}${hoverCard()}${statusBar(
-      chip({ color: COLORS.waiting, working: 2, dots: sessionDots(), hovered: true }),
+      chip({ color: COLORS.waiting, working: 2, dots: sessionDots(), usage: batteries(), hovered: true }),
     )}</div>`,
   },
   {

@@ -336,6 +336,26 @@ function archiveInClaudeCode(dbPath, ids) {
   db.close();
 }
 
+// The plan usage Claude Code caches in its global config each time it fetches it: .claude.json in the
+// config directory when CLAUDE_CONFIG_DIR is set, as in the tests. fiveHour, sevenDay: { used, resetsAt }
+// with used in percent and resetsAt in epoch milliseconds.
+function cacheUsage(dir, { fiveHour, sevenDay, fetchedAt = Date.now() }) {
+  const limit = (l) => l && { utilization: l.used, resets_at: new Date(l.resetsAt).toISOString(), limit_dollars: null };
+  const file = path.join(dir, '.claude.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      numStartups: 12,
+      cachedUsageUtilization: {
+        fetchedAtMs: fetchedAt,
+        accountUuid: 'account',
+        utilization: { five_hour: limit(fiveHour), seven_day: limit(sevenDay), seven_day_opus: null, extra_usage: { is_enabled: false } },
+      },
+    }),
+  );
+  fs.utimesSync(file, new Date(), new Date(Date.now() + Math.random() * 1e6)); // Seen as a change.
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -350,5 +370,6 @@ module.exports = {
   spawnForeignProcess,
   writeSession,
   archiveInClaudeCode,
+  cacheUsage,
   delay,
 };

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Usage limits:** after the dots, two batteries show what is left of your Claude plan's 5-hour and weekly usage limits (`5h 81% 7d 64%`), draining as you use them like a phone's battery. The hover says how much of each is used, when it resets and how old the reading is. They are read from the reading Claude Code caches in `~/.claude.json`, with no network calls, and hidden when there is none, such as with an API key. `agentWatch.showUsage` turns them off.
+
 ## 0.2.0 (2026-10-07)
 
 - **Archived sessions are hidden:** a session you archive in Claude Code no longer stays in the chip, hover, picker and panel while it is idle, although its process keeps running. It shows again while it works or waits for you. `agentWatch.showArchivedSessions` brings them back.

@@ -8,6 +8,7 @@ const path = require('path');
 const { readSessionRecords, normalize } = require('./records');
 const { TranscriptIndex, describeTool, resolveTitle } = require('./transcript');
 const { ArchivedSessions } = require('./archive');
+const { UsageCache } = require('./usage');
 
 const ID = 'claude-code';
 
@@ -18,6 +19,9 @@ function createClaudeCodeProvider({ configDir, opener, stateDb, log } = {}) {
   const sessionsDir = path.join(dir, 'sessions');
   const transcripts = new TranscriptIndex(path.join(dir, 'projects'));
   const archived = new ArchivedSessions({ dbPath: stateDb, log });
+  // Claude Code's global config sits in the config directory when one is set, else in the home folder.
+  const globalConfig = path.join(configDir || process.env.CLAUDE_CONFIG_DIR || os.homedir(), '.claude.json');
+  const usage = new UsageCache({ file: globalConfig });
 
   return {
     id: ID,
@@ -47,6 +51,11 @@ function createClaudeCodeProvider({ configDir, opener, stateDb, log } = {}) {
 
     prune(liveIds) {
       transcripts.prune(liveIds);
+    },
+
+    // The plan's 5-hour and weekly limits, as Claude Code last fetched them (./usage).
+    usage() {
+      return usage.get();
     },
 
     canOpen(session) {

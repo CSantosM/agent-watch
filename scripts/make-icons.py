@@ -2,7 +2,8 @@
 """Draws the Agent Watch robot once and writes it everywhere it appears:
 
   media/agent-watch.woff     the status bar glyph: product icon "agent-watch-robot", U+E000
-                              (the chip's live dots follow it, so it has none of its own)
+                              (the chip's live dots follow it, so it has none of its own), and the
+                              usage batteries "agent-watch-battery-0" to "-100", U+E001 to U+E00B
   media/activity.svg          the activity bar icon: the robot with three dots under its head,
                               in one color, as VS Code paints activity bar icons
   media/icon.svg, icon.png    the extension icon: the same, with the dots in their status colors
@@ -107,6 +108,25 @@ def dots(cy):
     return [circle(x, cy, DOT_R) for x in DOT_XS]
 
 
+# The usage batteries: a phone battery on its side, filled from the left with what is left of a
+# usage limit, in tenths. The chip picks one per limit.
+BATTERY_LEVELS = range(0, 101, 10)
+BATTERY_FILL = (3.8, 17.2)  # Left and right edges of a full charge.
+
+
+def battery(level):
+    contours = [
+        rounded_rect(0.8, 5.0, 20.2, 19.0, 2.6),  # body
+        rounded_rect(2.8, 7.0, 18.2, 17.0, 1.0, clockwise=False),  # inside the body
+        rounded_rect(19.6, 9.0, 23.0, 15.0, 1.0),  # terminal
+    ]
+    if level:
+        left, right = BATTERY_FILL
+        width = (right - left) * level / 100
+        contours.append(rounded_rect(left, 8.0, left + width, 16.0, min(0.6, width / 2)))
+    return contours
+
+
 def transform(contours, scale, dx, dy):
     """Scales and moves contours drawn on the grid."""
     def point(p):
@@ -132,13 +152,11 @@ def path_data(contours, scale=1.0, dx=0.0, dy=0.0):
     return ''.join(parts)
 
 
-def write_font(path):
-    unit = 50
-    upm = 24 * unit
+def glyph(contours, unit, upm):
     tt = TTGlyphPen(None)
     # Flip y (fonts point up) and turn the cubic curves into TrueType's quadratic ones.
     pen = TransformPen(Cu2QuPen(tt, max_err=0.5), (unit, 0, 0, -unit, 0, upm))
-    for segments in robot():
+    for segments in contours:
         for segment in segments:
             if segment[0] == 'M':
                 pen.moveTo(segment[1])
@@ -147,14 +165,27 @@ def write_font(path):
             else:
                 pen.curveTo(segment[1], segment[2], segment[3])
         pen.closePath()
+    return tt.glyph()
+
+
+def write_font(path):
+    unit = 50
+    upm = 24 * unit
+    glyphs = {'robot': (0xE000, robot())}
+    for i, level in enumerate(BATTERY_LEVELS):
+        glyphs[f'battery-{level}'] = (0xE001 + i, battery(level))
 
     builder = FontBuilder(upm, isTTF=True)
-    builder.setupGlyphOrder(['.notdef', 'robot'])
-    builder.setupCharacterMap({0xE000: 'robot'})
-    builder.setupGlyf({'.notdef': TTGlyphPen(None).glyph(), 'robot': tt.glyph()})
-    glyph = builder.font['glyf']['robot']
-    glyph.recalcBounds(builder.font['glyf'])
-    builder.setupHorizontalMetrics({'.notdef': (upm, 0), 'robot': (upm, glyph.xMin)})
+    builder.setupGlyphOrder(['.notdef', *glyphs])
+    builder.setupCharacterMap({code: name for name, (code, _) in glyphs.items()})
+    drawn = {name: glyph(contours, unit, upm) for name, (_, contours) in glyphs.items()}
+    builder.setupGlyf({'.notdef': TTGlyphPen(None).glyph(), **drawn})
+    metrics = {'.notdef': (upm, 0)}
+    for name in glyphs:
+        built = builder.font['glyf'][name]
+        built.recalcBounds(builder.font['glyf'])
+        metrics[name] = (upm, built.xMin)
+    builder.setupHorizontalMetrics(metrics)
     # Like VS Code's codicons: the glyph fills the em square, with no descent.
     builder.setupHorizontalHeader(ascent=upm, descent=0)
     builder.setupNameTable({'familyName': 'Agent Watch Icons', 'styleName': 'Regular'})
