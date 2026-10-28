@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 (2026-10-28)
 
 - **Usage rings readable on the default blue status bar:** with the default Light+ theme the rings blended into the bar (the 5-hour one was almost invisible), and with Dark+ the pastel blue and the red were faint. In light themes the 5-hour and weekly rings now take the status bar's own text color, white on Light+'s blue bar and dark on a light one; the dark themes' are lighter pastels.
 - **Sharper percent inside the rings:** the digits (7 px tall, 3 wide, or 4 for a single digit) are drawn on whole pixels with square ends, so they no longer blur at 100% scaling, and keep a pixel of margin to the ring, which is thinner. The 1 has a flag, and the unfilled part of the ring is fainter so the filled arc stands out.
