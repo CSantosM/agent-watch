@@ -65,6 +65,14 @@ const PANEL_COLORS = { busy: '#cca700', waiting: '#f14c4c', idle: '#89d185' };
 const COLORS = { waiting: '#F44336', busy: '#FBC02D', idle: '#CCCCCC' };
 const DOT = { busy: '🟡', waiting: '🔴', idle: '🟢' };
 
+// How much of the plan's usage limits is used, as the rings after the chip and their hover show it.
+// The ring colors are the dark defaults of agentWatch.usage.session and .weekly in package.json.
+const USAGE = [
+  { label: '5-hour limit', used: 19, resets: '2 h 14 min (19:59)', color: '#9DC8F2' },
+  { label: 'Weekly limit', used: 36, resets: '3 d (Sun 1 Nov, 12:59)', color: '#F7C59F' },
+  { label: 'Weekly limit, Fable', used: 8, resets: '3 d (Sun 1 Nov, 12:59)' },
+];
+
 const SESSIONS = [
   {
     title: 'fix/login-redirect',
@@ -118,8 +126,17 @@ const CODE = [
 const ROBOT_FONT = path.join(__dirname, '..', 'media', 'agent-watch.woff');
 const esc = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const icon = (name) => `<span class="codicon">&#${ICONS[name]};</span>`;
-// The extension's own robot, from media/agent-watch.woff (scripts/make-icons.py).
-const robot = () => '<span class="codicon robot">&#xE000;</span>';
+// The extension's own robot and usage rings, from media/agent-watch.woff (scripts/make-icons.py).
+const robot = () => '<span class="codicon own">&#xE000;</span>';
+const ring = (u) =>
+  `<span class="codicon own"${u.color ? ` style="color: ${u.color}"` : ''}>&#x${(0xe001 + Math.max(1, Math.round(u.used / 10))).toString(16)};</span>`;
+// The two rings after the chip, each a status bar item of its own color.
+const rings = (hovered = false) =>
+  USAGE.filter((u) => u.color)
+    .map((u, i) => `<div class="item${hovered && i === 0 ? ' hovered' : ''}">${ring(u)}</div>`)
+    .join('');
+const usageLines = () =>
+  `${USAGE.map((u) => `${ring(u)} <strong>${u.label}</strong> · ${u.used}% used · resets in ${u.resets}`).join('<br>')}<br><em>Read by Claude Code 1 min ago</em>`;
 // The activity bar icon, robot and dots, painted in the activity bar's color like VS Code does.
 const activityIcon = () =>
   fs
@@ -133,7 +150,7 @@ function css() {
   return `
 @font-face { font-family: codicon; src: url(data:font/ttf;base64,${font}) format("truetype"); }
 @font-face { font-family: agent-watch; src: url(data:font/woff;base64,${robotFont}) format("woff"); }
-.codicon.robot { font-family: agent-watch; }
+.codicon.own { font-family: agent-watch; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: #1f1f1f; color: #cccccc; font-family: "Noto Sans", "Ubuntu", sans-serif; -webkit-font-smoothing: antialiased; }
 .codicon { font-family: codicon; font-size: 16px; line-height: 1; display: inline-block; vertical-align: -3px; }
@@ -204,7 +221,7 @@ function chip({ color, label: text = '', working = 0, dots = '', more = '', filt
 }
 
 const bell = () => `<div class="item">${icon('bell')}</div>`;
-const sessionDots = () => SESSIONS.map((s) => DOT[s.status]).join('');
+const sessionDots = (sessions = SESSIONS) => sessions.map((s) => DOT[s.status]).join('');
 
 function statusBar(chipHtml) {
   return `<div class="statusbar">
@@ -223,20 +240,21 @@ function editor(file = 'room.service.ts') {
   return `<div class="tabs"><div class="tab"><span class="lang">TS</span>${file}</div></div><div class="code">${lines}</div>`;
 }
 
-function hoverCard() {
+function hoverCard(sessions = SESSIONS) {
   const link = (text) => `<a>${text}</a>`;
   const counts = { busy: 0, waiting: 0, idle: 0 };
-  SESSIONS.forEach((s) => (counts[s.status] += 1));
-  const rows = SESSIONS.map((s, i) => {
+  sessions.forEach((s) => (counts[s.status] += 1));
+  const rows = sessions.map((s, i) => {
     let row = `${DOT[s.status]} <code>${i + 1}</code> ${link(esc(s.title))}<br>${s.label} · ${esc(s.since)} · ${esc(s.folder)} · ${esc(s.branch)}`;
     if (s.waitingFor) row += `<br><em>${esc(s.waitingFor)}</em>`;
     if (s.action) row += `<br>${icon(s.action.icon)} ${esc(s.action.text)}`;
     return `<p>${row}</p>`;
   }).join('');
   return `<div class="hover" style="right: 20px; bottom: 26px;">
-  <p><strong>Agents</strong> · ${SESSIONS.length} sessions in this window, 2 working</p>
-  <p>Filter: <strong>All (${SESSIONS.length})</strong> · ${link(`Working (${counts.busy})`)} · ${link(`Waiting (${counts.waiting})`)} · ${link(`Idle (${counts.idle})`)}</p>
+  <p><strong>Agents</strong> · ${sessions.length} sessions in this window, ${counts.busy} working</p>
+  <p>Filter: <strong>All (${sessions.length})</strong> · ${link(`Working (${counts.busy})`)} · ${link(`Waiting (${counts.waiting})`)} · ${link(`Idle (${counts.idle})`)}</p>
   <hr>${rows}<hr>
+  <p>${usageLines()}</p><hr>
   <p>${link(`${icon('list-selection')} Open session picker`)} · ${link(`${icon('layout-sidebar-left')} Show panel`)}</p>
 </div>`;
 }
@@ -306,6 +324,7 @@ const STATES = [
   { caption: 'Someone needs you', note: 'The robot turns red', chip: { color: COLORS.waiting, working: 2, dots: sessionDots() } },
   { caption: 'Filtered to Waiting', note: 'A funnel shows while a filter is on', chip: { color: COLORS.waiting, working: 2, dots: '🔴', filter: true } },
   { caption: 'More than 8 sessions', note: 'The rest are grouped as +N', chip: { color: COLORS.busy, working: 3, dots: '🟢🟡🟢🟡🟢🟢🟡🟢', more: '+3' } },
+  { caption: 'Plan usage', note: '5-hour and weekly limits used', chip: { color: COLORS.busy, working: 1, dots: '🟢🟡🟢' }, rings: true },
 ];
 
 const IMAGES = [
@@ -314,8 +333,18 @@ const IMAGES = [
     width: 820,
     height: 560,
     body: `<div class="frame" style="width: 820px; height: 560px;">${editor()}${hoverCard()}${statusBar(
-      chip({ color: COLORS.waiting, working: 2, dots: sessionDots(), hovered: true }),
+      chip({ color: COLORS.waiting, working: 2, dots: sessionDots(), hovered: true }) + rings(),
     )}</div>`,
+  },
+  {
+    // The usage limits up close: the hover of the rings after the chip, with the detail of every limit.
+    name: 'usage.png',
+    width: 820,
+    height: 300,
+    body: `<div class="frame" style="width: 820px; height: 300px;">${editor()}<div class="hover" style="right: 46px; bottom: 26px;">
+  <p><strong>Usage limits</strong></p>
+  <p>${usageLines()}</p>
+</div>${statusBar(chip({ color: COLORS.waiting, working: 1, dots: sessionDots(SESSIONS.slice(0, 2)) }) + rings(true))}</div>`,
   },
   {
     name: 'panel.png',
@@ -334,7 +363,7 @@ const IMAGES = [
     width: 560,
     height: 20 * 2 + STATES.length * 38 + (STATES.length - 1) * 10,
     body: `<div class="states">${STATES.map(
-      (s) => `<div class="state"><div class="caption">${s.caption}<small>${s.note}</small></div><div class="bar">${chip(s.chip)}${bell()}</div></div>`,
+      (s) => `<div class="state"><div class="caption">${s.caption}<small>${s.note}</small></div><div class="bar">${chip(s.chip)}${s.rings ? rings() : ''}${bell()}</div></div>`,
     ).join('')}</div>`,
   },
 ];

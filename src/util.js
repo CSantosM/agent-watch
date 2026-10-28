@@ -10,6 +10,14 @@ function formatElapsed(ms) {
   return `${Math.floor(hours / 24)} d`;
 }
 
+// A moment in local time as a clock shows it: "19:59" on the day of now, "Sat 1 Nov, 12:59" another day.
+function formatClock(ms, now) {
+  const date = new Date(ms);
+  const time = date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  if (date.toDateString() === new Date(now).toDateString()) return time;
+  return `${date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}, ${time}`;
+}
+
 function plural(n, word) {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
@@ -55,4 +63,4 @@ function withTimeout(promise, ms) {
   ]).finally(() => clearTimeout(timer));
 }
 
-module.exports = { formatElapsed, plural, truncate, escapeMarkdown, commandLink, toMillis, delay, withTimeout };
+module.exports = { formatElapsed, formatClock, plural, truncate, escapeMarkdown, commandLink, toMillis, delay, withTimeout };

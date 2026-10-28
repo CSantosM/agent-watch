@@ -4,9 +4,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { createClaudeDir, archiveInClaudeCode } = require('./helpers');
+const { createClaudeDir, archiveInClaudeCode, cacheUsage } = require('./helpers');
 const { readSessionRecords, normalize } = require('../src/providers/claude-code/records');
 const { archivedIn } = require('../src/providers/claude-code/archive');
+const { usageIn } = require('../src/providers/claude-code/usage');
 const { createClaudeCodeProvider } = require('../src/providers/claude-code');
 
 test('readSessionRecords keeps valid records and skips broken ones', async () => {
@@ -119,4 +120,71 @@ test('archivedIn reads the ids from Claude Code state and ignores anything else'
   assert.deepEqual([...archivedIn(JSON.stringify({ hiddenSessionIds: 'a' }))], []);
   assert.deepEqual([...archivedIn(JSON.stringify({}))], []);
   assert.deepEqual([...archivedIn(undefined)], [], 'Claude Code never ran in this profile');
+});
+
+test('usageIn reads every limit /usage lists, from the list Claude Code caches', () => {
+  const resetsAt = '2026-10-28T18:59:59.569850+00:00';
+  const usage = usageIn({
+    cachedUsageUtilization: {
+      fetchedAtMs: 1793202219668,
+      utilization: {
+        five_hour: { utilization: 99, resets_at: resetsAt },
+        limits: [
+          { kind: 'session', group: 'session', percent: 19, resets_at: resetsAt, scope: null },
+          { kind: 'weekly_all', group: 'weekly', percent: 22, resets_at: null, scope: null },
+          { kind: 'weekly_scoped', percent: 6, resets_at: resetsAt, scope: { model: { id: null, display_name: 'Fable' }, surface: null } },
+          { kind: 'weekly_scoped', percent: 3, scope: { model: { display_name: '' } } },
+          { kind: 'monthly_new', percent: 50 },
+          { kind: 'session', percent: '19' },
+          null,
+        ],
+      },
+    },
+  });
+  assert.deepEqual(usage, {
+    fetchedAt: 1793202219668,
+    limits: [
+      { key: 'session', label: '5-hour limit', used: 19, resetsAt: Date.parse('2026-10-28T18:59:59.569Z') },
+      { key: 'weekly', label: 'Weekly limit', used: 22, resetsAt: undefined },
+      { key: 'weekly:Fable', label: 'Weekly limit, Fable', used: 6, resetsAt: Date.parse('2026-10-28T18:59:59.569Z') },
+    ],
+  }, 'the list wins over the fields; unnamed scopes, unknown kinds and odd entries are left out');
+});
+
+test('usageIn falls back to one field per limit and ignores anything else', () => {
+  const config = (utilization) => ({ cachedUsageUtilization: { fetchedAtMs: 1793202219668, utilization } });
+  const limits = (utilization) => usageIn(config(utilization)).limits.map((l) => [l.key, l.used]);
+  assert.deepEqual(
+    limits({
+      five_hour: { utilization: 140 },
+      seven_day: { utilization: '22' },
+      seven_day_opus: { utilization: 8 },
+      seven_day_sonnet: null,
+      limits: [{ kind: 'unknown', percent: 1 }],
+    }),
+    [['session', 100], ['weekly:Opus', 8]],
+    'kept within 0-100; a limit that is not a number is skipped',
+  );
+  assert.equal(usageIn(config({ five_hour: null, seven_day: null, limits: [] })), undefined);
+  assert.equal(usageIn({ numStartups: 3 }), undefined, 'signed in with an API key, or no reading yet');
+  assert.equal(usageIn(null), undefined);
+});
+
+test('the provider reads the usage from Claude Code global config, again only when it changes', async () => {
+  const dir = createClaudeDir();
+  const provider = createClaudeCodeProvider({ configDir: dir });
+  assert.equal(await provider.usage(), undefined, 'no global config yet');
+
+  const resetsAt = Date.now() + 3600000;
+  cacheUsage(dir, { fiveHour: { used: 19, resetsAt }, sevenDay: { used: 22, resetsAt } });
+  assert.deepEqual((await provider.usage()).limits.map((l) => l.used), [19, 22]);
+
+  const file = path.join(dir, '.claude.json');
+  fs.writeFileSync(file, '{"cachedUsageUtilization":{"fetch');
+  fs.utimesSync(file, new Date(), new Date(Date.now() + 1000));
+  assert.deepEqual((await provider.usage()).limits.map((l) => l.used), [19, 22], 'caught mid-write: the last reading holds');
+
+  fs.writeFileSync(file, JSON.stringify({ numStartups: 12 }));
+  fs.utimesSync(file, new Date(), new Date(Date.now() + 2000));
+  assert.equal(await provider.usage(), undefined, 'signed out: Claude Code drops the reading');
 });

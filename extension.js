@@ -12,7 +12,7 @@ const { createGit } = require('./src/git');
 const { SessionsPanel } = require('./src/panel');
 const { Sound } = require('./src/sound');
 const { DesktopNotifier } = require('./src/desktop');
-const { formatElapsed, plural, truncate, escapeMarkdown, commandLink, withTimeout } = require('./src/util');
+const { formatElapsed, formatClock, plural, truncate, escapeMarkdown, commandLink, withTimeout } = require('./src/util');
 
 const CMD = {
   showSessions: 'agentWatch.showSessions',
@@ -46,6 +46,15 @@ const FILTERS = [
 ];
 const DEFAULT_DOTS = { busy: '🟡', waiting: '🔴', idle: '🟢', unknown: '⚪' };
 const SCOPE_TEXT = { window: 'in this window', workspace: 'in this workspace', all: 'on this machine' };
+// The usage rings right after the chip, left to right: a status bar item each, since an item takes a
+// single color. Each id names both the item and its color, contributed in package.json with pastel
+// defaults that themes and workbench.colorCustomizations can change.
+const USAGE_RINGS = [
+  { key: 'session', id: 'agentWatch.usage.session', name: 'Agent Watch: 5-Hour Limit', priority: -10001 },
+  { key: 'weekly', id: 'agentWatch.usage.weekly', name: 'Agent Watch: Weekly Limit', priority: -10002 },
+];
+// The ring glyphs by tenths used (scripts/make-icons.py); hovers drop icons whose names have digits.
+const USAGE_LEVELS = ['zero', 'ten', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred'];
 
 const TICK_MS = 5000;
 const DEBOUNCE_MS = 150;
@@ -94,6 +103,7 @@ class AgentWatch {
     this.desktop = new DesktopNotifier({ icon: path.join(context.extensionPath, 'media', 'icon.png'), log });
     this.pidDomain = localPidDomain();
     this.sessions = [];
+    this.usage = [];
     this.lastSeen = new Map();
     this.finished = [];
     this.finishedTimer = undefined;
@@ -105,10 +115,17 @@ class AgentWatch {
     this.again = false;
     this.rendered = {};
 
-    // Lowest priority on the right keeps the chip next to the notifications bell.
+    // Lowest priorities on the right keep the chip, and the usage rings after it, next to the
+    // notifications bell.
     this.item = vscode.window.createStatusBarItem('agentWatch.chip', vscode.StatusBarAlignment.Right, -10000);
     this.item.name = 'Agent Watch';
     this.item.command = CMD.showSessions;
+    this.rings = USAGE_RINGS.map((ring) => {
+      const item = vscode.window.createStatusBarItem(ring.id, vscode.StatusBarAlignment.Right, ring.priority);
+      item.name = ring.name;
+      item.color = new vscode.ThemeColor(ring.id);
+      return { ...ring, item, rendered: {} };
+    });
 
     this.panel = new SessionsPanel({
       visible: () => this.visible(),
@@ -122,6 +139,7 @@ class AgentWatch {
     const timer = setInterval(() => this.tick(), TICK_MS);
     context.subscriptions.push(
       this.item,
+      ...this.rings.map((r) => r.item),
       this.view,
       this.panel,
       {
@@ -241,9 +259,10 @@ class AgentWatch {
     try {
       do {
         this.again = false;
-        const { sessions, archived } = await this.load();
+        const { sessions, archived, usage } = await this.load();
         if (this.inFlight !== run) return; // A newer refresh replaced this stuck one.
         this.sessions = sessions;
+        this.usage = usage;
         this.announceTransitions(archived);
         this.render();
         if (this.picker) this.picker.rebuild();
@@ -258,7 +277,11 @@ class AgentWatch {
 
   async load() {
     const cfg = settings();
-    const [lists, shells] = await Promise.all([Promise.all(this.providers.map((p) => this.listFrom(p))), terminalShells()]);
+    const [lists, shells, usage] = await Promise.all([
+      Promise.all(this.providers.map((p) => this.listFrom(p))),
+      terminalShells(),
+      cfg.showUsage ? this.loadUsage() : [],
+    ]);
     const live = filterByDomain(lists.flat(), this.pidDomain).filter(isAlive);
     for (const provider of this.providers) {
       provider.prune(new Set(live.filter((s) => s.provider === provider.id).map((s) => s.id)));
@@ -274,7 +297,26 @@ class AgentWatch {
     // A session archived in the agent's own UI is put away: hidden while idle, back while it works or
     // waits for you.
     const archived = cfg.showArchivedSessions ? [] : sessions.filter((s) => s.archived && s.status === 'idle');
-    return { sessions: arrange(sessions.filter((s) => !archived.includes(s)), cfg), archived };
+    return { sessions: arrange(sessions.filter((s) => !archived.includes(s)), cfg), archived, usage };
+  }
+
+  // The usage limits of the providers that report them, each reading with the provider it came from.
+  async loadUsage() {
+    const readings = await Promise.all(
+      this.providers
+        .filter((p) => typeof p.usage === 'function')
+        .map(async (provider) => {
+          try {
+            const usage = await provider.usage();
+            this.logChange(`usage:${provider.id}`, 'warn', '');
+            return usage && { ...usage, providerLabel: provider.label };
+          } catch (err) {
+            this.logChange(`usage:${provider.id}`, 'warn', `${provider.label}: could not read the usage limits: ${err.message}`);
+            return undefined;
+          }
+        }),
+    );
+    return readings.filter(Boolean);
   }
 
   async listFrom(provider) {
@@ -487,9 +529,11 @@ class AgentWatch {
     const all = this.sessions;
     const visible = this.visible();
     this.renderView(all);
+    const limits = usageLimits(this.usage, Date.now());
     if (!all.length && cfg.hideWhenEmpty) {
       this.item.hide();
       this.rendered.visible = false;
+      this.renderRings([]);
       return;
     }
 
@@ -511,7 +555,7 @@ class AgentWatch {
     if (finished) text += ` ${finished}`;
     // With no sessions the chip keeps the status bar's own color, so it stays easy to find.
     const color = (cfg.iconReflectsStatus && urgentColor(all)) || '';
-    const tooltip = this.tooltip(all, visible, cfg);
+    const tooltip = this.tooltip(all, visible, cfg, limits);
 
     // Only touch what changed: reassigning the tooltip redraws a hover the user may be reading.
     if (text !== this.rendered.text) this.item.text = this.rendered.text = text;
@@ -531,6 +575,34 @@ class AgentWatch {
       this.item.show();
       this.rendered.visible = true;
     }
+    this.renderRings(limits);
+  }
+
+  // Like a progress spinner, a ring per usage limit in USAGE_RINGS fills up as the plan is used, in
+  // its own color after the chip. Hovering either one shows the detail of every limit.
+  renderRings(limits) {
+    const tooltip = limits.length ? ['**Usage limits**', usageHover(limits, this.usage, Date.now())].join('\n\n') : '';
+    for (const ring of this.rings) {
+      const { item, rendered } = ring;
+      const limit = limits.find((l) => l.key === ring.key);
+      if (!limit) {
+        if (rendered.visible) item.hide();
+        rendered.visible = false;
+        continue;
+      }
+      const text = `$(${usageIcon(limit.used)})`;
+      if (text !== rendered.text) item.text = rendered.text = text;
+      if (tooltip !== rendered.tooltip) {
+        const md = new vscode.MarkdownString(tooltip);
+        md.supportThemeIcons = true;
+        md.isTrusted = { enabledCommands: [] }; // Trusted hovers keep the spans that color the rings.
+        item.tooltip = md;
+        rendered.tooltip = tooltip;
+      }
+      item.accessibilityInformation = { label: `${limit.label}: ${limit.used}% used` };
+      if (!rendered.visible) item.show();
+      rendered.visible = true;
+    }
   }
 
   renderView(all) {
@@ -543,9 +615,10 @@ class AgentWatch {
     this.panel.refresh();
   }
 
-  tooltip(all, visible, cfg) {
+  tooltip(all, visible, cfg, limits) {
     const where = SCOPE_TEXT[cfg.scope];
-    if (!all.length) return `**Agents** · no sessions running ${where}`;
+    const usage = limits.length ? ['---', usageHover(limits, this.usage, Date.now())] : [];
+    if (!all.length) return [`**Agents** · no sessions running ${where}`, ...usage].join('\n\n');
 
     const working = countFor(all, 'busy');
     let header = `**Agents** · ${plural(all.length, 'session')} ${where}${working ? `, ${working} working` : ''}`;
@@ -577,7 +650,7 @@ class AgentWatch {
       commandLink('$(list-selection) Open session picker', CMD.showSessions),
       commandLink('$(layout-sidebar-left) Show panel', `${VIEW_ID}.focus`),
     ].join(' · ');
-    return [header, `Filter: ${filters}`, '---', rows, '---', footer].join('\n\n');
+    return [header, `Filter: ${filters}`, '---', rows, ...usage, '---', footer].join('\n\n');
   }
 
   hoverRow(s, cfg, { grouped, showProvider }) {
@@ -839,6 +912,7 @@ function settings() {
     groupBy: oneOf('groupBy', ['none', 'branch']),
     showEmptySessions: c.get('showEmptySessions') === true,
     showArchivedSessions: c.get('showArchivedSessions') === true,
+    showUsage: c.get('showUsage') !== false,
     icon: typeof icon === 'string' && /^[a-z0-9-]+$/.test(icon) ? icon : 'agent-watch-robot',
     iconReflectsStatus: c.get('iconReflectsStatus') !== false,
     maxDots: Number.isInteger(maxDots) ? Math.min(50, Math.max(1, maxDots)) : 8,
@@ -937,6 +1011,43 @@ function activity(s) {
 function whereElse(s) {
   if (s.owned) return undefined;
   return s.surface === 'editor' ? 'another VS Code window' : 'a terminal outside VS Code';
+}
+
+// How much of each usage limit is used now, in whole percent. A limit whose window ended after the
+// reading was taken has started over, although no newer reading says so yet.
+function usageLimits(readings, now) {
+  return readings.flatMap((r) =>
+    r.limits.map((l) => {
+      const reset = l.resetsAt !== undefined && l.resetsAt <= now;
+      return { ...l, reset, used: reset ? 0 : Math.round(l.used) };
+    }),
+  );
+}
+
+// The ring for how much of a limit is used, in tenths (media/agent-watch.woff, drawn by
+// scripts/make-icons.py). Only an untouched limit looks empty, and only one used up full.
+function usageIcon(used) {
+  const tenths = used <= 0 ? 0 : used >= 100 ? 10 : Math.min(9, Math.max(1, Math.round(used / 10)));
+  return `agent-watch-usage-${USAGE_LEVELS[tenths]}`;
+}
+
+// The detail of every limit in the hover, as /usage lists them, then how old each reading is: Claude
+// Code only updates it while it runs.
+function usageHover(limits, readings, now) {
+  const lines = limits.map((l) => {
+    let detail = `${l.used}% used`;
+    if (l.reset) detail += ` · reset ${formatElapsed(now - l.resetsAt)} ago`;
+    else if (l.resetsAt) detail += ` · resets in ${formatElapsed(l.resetsAt - now)} (${formatClock(l.resetsAt, now)})`;
+    // Each ring in its status bar color: trusted hovers keep a span colored with a theme color.
+    const ring = USAGE_RINGS.find((r) => r.key === l.key);
+    const icon = `$(${usageIcon(l.used)})`;
+    const colored = ring ? `<span style="color:var(--vscode-${ring.id.replace(/\./g, '-')});">${icon}</span>` : icon;
+    return `${colored} **${escapeMarkdown(l.label)}** · ${escapeMarkdown(detail)}`;
+  });
+  for (const r of readings) {
+    if (r.fetchedAt) lines.push(`_${escapeMarkdown(`Read by ${r.providerLabel} ${formatElapsed(now - r.fetchedAt)} ago`)}_`);
+  }
+  return lines.join('  \n');
 }
 
 function urgentColor(sessions) {
