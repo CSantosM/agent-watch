@@ -119,63 +119,71 @@ def dots(cy):
 # reading.
 USAGE_LEVELS = range(0, 101)
 USAGE_UNKNOWN = 0xE001 + len(USAGE_LEVELS)
-RING_R = 10.85  # Radius of the middle of the arc.
-RING_ARC = 1.05  # Half the arc's thickness.
-RING_TRACK = 0.35  # Half the thickness of the circle it fills.
+PX = 1.5  # Grid units per pixel: the glyph is 16 px tall in the status bar.
+RING_R = 11.0  # Radius of the middle of the arc.
+RING_ARC = 0.9  # Half the arc's thickness.
+RING_TRACK = 0.25  # Half the thickness of the circle it fills: faint, so the arc stands out.
 
-# The digits inside: strokes along the segments of a seven-segment display, joined at the corners so
-# they read as a plain geometric face. Each is drawn in a box of DIGIT_W by DIGIT_H grid units.
-DIGIT_W = 5.6
-DIGIT_H = 11.5
-DIGIT_STROKE = 1.75
-DIGIT_GAP = 1.0
+# The digits inside: strokes along the segments of a seven-segment display, a pixel thick, in a box of
+# DIGIT_W by DIGIT_H (DIGIT_W_ONE for a lone digit). Everything inside the ring sits on whole pixels:
+# a stroke across two pixel rows is smeared by anti-aliasing. Any bigger and the corners of an 88 touch
+# the ring: this leaves a pixel of margin.
+DIGIT_W = 3 * PX
+DIGIT_W_ONE = 4 * PX
+DIGIT_H = 7 * PX
+DIGIT_STROKE = PX
+DIGIT_GAP = 2 * PX
 SEGMENTS = {  # a top, b top right, c bottom right, d bottom, e bottom left, f top left, g middle
     '0': 'abcdef', '1': 'bc', '2': 'abdeg', '3': 'abcdg', '4': 'bcfg',
     '5': 'acdfg', '6': 'acdefg', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg',
 }
 
 
-def digit(char, x0, y0):
-    s, r = DIGIT_STROKE, DIGIT_STROKE / 2
-    x1, y1 = x0 + DIGIT_W, y0 + DIGIT_H
+def box(x0, y0, x1, y1):
+    return [('M', (x0, y0)), ('L', (x1, y0)), ('L', (x1, y1)), ('L', (x0, y1))]
+
+
+def digit(char, x0, y0, w):
+    s = DIGIT_STROKE
+    x1, y1 = x0 + w, y0 + DIGIT_H
     ym = (y0 + y1) / 2
-    if char == '1':  # A single upright, centered in its box.
-        x = (x0 + x1 - s) / 2
-        return [rounded_rect(x, y0, x + s, y1, r)]
+    if char == '1':  # An upright with a flag, so it does not read as a bar.
+        x = x0 + math.ceil((w - s) / 2 / PX) * PX
+        return [box(x, y0, x + s, y1), box(x - s, y0 + s, x, y0 + 2 * s)]
     bars = {
         'a': (x0, y0, x1, y0 + s),
-        'b': (x1 - s, y0, x1, ym + r),
-        'c': (x1 - s, ym - r, x1, y1),
+        'b': (x1 - s, y0, x1, ym + s / 2),
+        'c': (x1 - s, ym - s / 2, x1, y1),
         'd': (x0, y1 - s, x1, y1),
-        'e': (x0, ym - r, x0 + s, y1),
-        'f': (x0, y0, x0 + s, ym + r),
-        'g': (x0, ym - r, x1, ym + r),
+        'e': (x0, ym - s / 2, x0 + s, y1),
+        'f': (x0, y0, x0 + s, ym + s / 2),
+        'g': (x0, ym - s / 2, x1, ym + s / 2),
     }
-    return [rounded_rect(*bars[segment], r) for segment in SEGMENTS[char]]
+    return [box(*bars[segment]) for segment in SEGMENTS[char]]
 
 
 def number(text):
-    width = len(text) * DIGIT_W + (len(text) - 1) * DIGIT_GAP
-    x0, y0 = 12 - width / 2, 12 - DIGIT_H / 2
-    return [contour for i, char in enumerate(text) for contour in digit(char, x0 + i * (DIGIT_W + DIGIT_GAP), y0)]
+    w = DIGIT_W_ONE if len(text) == 1 else DIGIT_W
+    width = (len(text) * w + (len(text) - 1) * DIGIT_GAP) / PX
+    # Centered on the ring, a half pixel to the left or up when the box has an odd size.
+    x0, y0 = math.floor(8 - width / 2) * PX, math.floor(8 - DIGIT_H / PX / 2) * PX
+    return [contour for i, char in enumerate(text) for contour in digit(char, x0 + i * (w + DIGIT_GAP), y0, w)]
 
 
 def exclamation():
-    s, r = DIGIT_STROKE, DIGIT_STROKE / 2
-    x0, y0 = 12 - r, 12 - DIGIT_H / 2
-    return [rounded_rect(x0, y0, x0 + s, y0 + DIGIT_H - s - 1.4, r), circle(12, y0 + DIGIT_H - r, r)]
+    x0, y0 = 7 * PX, 4 * PX
+    return [box(x0, y0, x0 + 2 * PX, y0 + 4 * PX), box(x0, y0 + 5 * PX, x0 + 2 * PX, y0 + 7 * PX)]
 
 
 def question():
-    s, r = DIGIT_STROKE, DIGIT_STROKE / 2
-    x0, y0 = 12 - DIGIT_W / 2, 12 - DIGIT_H / 2
-    x1, y1, ym = x0 + DIGIT_W, y0 + DIGIT_H, 12 - 0.6
+    x0, y0 = 5 * PX, 4 * PX  # Five pixels wide, seven tall.
     return [
-        rounded_rect(x0, y0, x1, y0 + s, r),  # The hook: over the top, down the right, back to the middle.
-        rounded_rect(x1 - s, y0, x1, ym + r, r),
-        rounded_rect(12 - r, ym - r, x1, ym + r, r),
-        rounded_rect(12 - r, ym - r, 12 + r, y1 - s - 1.4, r),  # The stem, under the middle.
-        circle(12, y1 - r, r),
+        box(x0, y0, x0 + 5 * PX, y0 + PX),  # The hook: over the top, down the right, back to the middle.
+        box(x0, y0, x0 + PX, y0 + 2 * PX),
+        box(x0 + 4 * PX, y0, x0 + 5 * PX, y0 + 3 * PX),
+        box(x0 + 2 * PX, y0 + 2 * PX, x0 + 5 * PX, y0 + 3 * PX),
+        box(x0 + 2 * PX, y0 + 2 * PX, x0 + 3 * PX, y0 + 5 * PX),  # The stem, under the middle.
+        box(x0 + 2 * PX, y0 + 6 * PX, x0 + 3 * PX, y0 + 7 * PX),  # And its dot.
     ]
 
 

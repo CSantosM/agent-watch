@@ -369,9 +369,9 @@
         "id": "agentWatch.usage.session",
         "description": "Color of the ring for the 5-hour usage limit, after the Agent Watch chip.",
         "defaults": {
-          "dark": "#9DC8F2",
-          "light": "#3F7FC0",
-          "highContrast": "#9DC8F2",
+          "dark": "#C0DCF7",
+          "light": "statusBar.foreground",
+          "highContrast": "#C0DCF7",
           "highContrastLight": "#0F5596"
         }
       },
@@ -379,9 +379,9 @@
         "id": "agentWatch.usage.weekly",
         "description": "Color of the ring for the weekly usage limits, after the Agent Watch chip.",
         "defaults": {
-          "dark": "#F7C59F",
-          "light": "#C8743A",
-          "highContrast": "#F7C59F",
+          "dark": "#F8CFAF",
+          "light": "statusBar.foreground",
+          "highContrast": "#F8CFAF",
           "highContrastLight": "#9A4A10"
         }
       },
@@ -389,8 +389,8 @@
         "id": "agentWatch.usage.high",
         "description": "Color of a usage limit's ring, after the Agent Watch chip, once 80% of the limit is used.",
         "defaults": {
-          "dark": "#F28B82",
-          "light": "#C62828",
+          "dark": "#FFA39B",
+          "light": "#6B0F0A",
           "highContrast": "#F48771",
           "highContrastLight": "#B5200D"
         }
